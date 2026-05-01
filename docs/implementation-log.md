@@ -15,5 +15,5 @@
 - Files changed summary: added Qwen runtime modules for config delegation, health checks, redaction, npm/native command aliases, `.env.example`, public vLLM compose, Qwen-only Responses compatibility, provider auth isolation for non-OpenAI custom providers, and verification docs.
 - Tests run: `just fmt`; `cargo test -p codex-qwen`; `cargo test -p codex-core qwen_compat`; `cargo test -p codex-model-provider`; `cargo build -p codex-cli`; `just fix -p codex-qwen`; `just fix -p codex-model-provider`; `just fix -p codex-core`; `just fix -p codex-cli`; `just bazel-lock-update`; `just bazel-lock-check`; `pnpm run format`; CLI smoke tests for `qwen-codex --help`, `qwen-codex --version`, `qwencodex --help`, `qwen-codex --health`; Docker Compose config validation; local Qwen smoke prompt.
 - Result: normal CLI milestone verified. Local vLLM baseline is healthy at `http://127.0.0.1:8002/v1` with `qwen35-local`, 32768 context, GPU memory utilization `0.90`, `TRITON_ATTN`, and the normal model call returned visible assistant text `4`.
-- Commit hash: pending.
+- Commit hash: `720cc740f04c3e5fbb6de9a0e7d1bb3c8d7e6cb9`.
 - Next step: commit and push the normal CLI milestone, then begin YOLO mode in a separate milestone.
