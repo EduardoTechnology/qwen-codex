@@ -69,6 +69,7 @@ impl OpenAiModelsEndpoint {
 impl ModelsEndpointClient for OpenAiModelsEndpoint {
     fn has_command_auth(&self) -> bool {
         self.provider_info.has_command_auth()
+            || self.provider_info.experimental_bearer_token.is_some()
     }
 
     async fn uses_codex_backend(&self) -> bool {

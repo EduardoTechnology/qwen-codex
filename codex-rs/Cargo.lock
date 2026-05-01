@@ -2143,6 +2143,7 @@ dependencies = [
  "codex-memories-write",
  "codex-models-manager",
  "codex-protocol",
+ "codex-qwen",
  "codex-responses-api-proxy",
  "codex-rmcp-client",
  "codex-rollout-trace",
@@ -3254,6 +3255,23 @@ dependencies = [
  "ts-rs",
  "uuid",
  "wildmatch",
+]
+
+[[package]]
+name = "codex-qwen"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "codex-arg0",
+ "codex-utils-home-dir",
+ "pretty_assertions",
+ "regex-lite",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

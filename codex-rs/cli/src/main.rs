@@ -729,7 +729,11 @@ fn stage_str(stage: Stage) -> &'static str {
 
 fn main() -> anyhow::Result<()> {
     arg0_dispatch_or_else(|arg0_paths: Arg0DispatchPaths| async move {
-        cli_main(arg0_paths).await?;
+        if codex_qwen::env_requests_qwen_entrypoint() {
+            codex_qwen::run_qwen_entrypoint(arg0_paths).await?;
+        } else {
+            cli_main(arg0_paths).await?;
+        }
         Ok(())
     })
 }

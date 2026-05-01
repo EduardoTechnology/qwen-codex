@@ -384,6 +384,18 @@ mod tests {
     }
 
     #[test]
+    fn custom_provider_without_openai_auth_does_not_use_openai_auth_manager() {
+        let provider = create_model_provider(
+            provider_for("http://localhost:1234/v1".to_string()),
+            Some(AuthManager::from_auth_for_testing(
+                CodexAuth::create_dummy_chatgpt_auth_for_testing(),
+            )),
+        );
+
+        assert!(provider.auth_manager().is_none());
+    }
+
+    #[test]
     fn openai_provider_returns_unauthenticated_openai_account_state() {
         let provider = create_model_provider(
             ModelProviderInfo::create_openai_provider(/*base_url*/ None),

@@ -3,7 +3,9 @@
   "version": "0.0.0-dev",
   "license": "Apache-2.0",
   "bin": {
-    "codex": "bin/codex.js"
+    "codex": "bin/codex.js",
+    "qwen-codex": "bin/qwen-codex.js",
+    "qwencodex": "bin/qwencodex.js"
   },
   "type": "module",
   "engines": {

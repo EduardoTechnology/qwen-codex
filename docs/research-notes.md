@@ -1,6 +1,6 @@
 # Research Notes
 
-Last updated: 2026-05-01T07:51:23Z
+Last updated: 2026-05-01T19:14:48Z
 
 ## Repository Structure
 
@@ -74,14 +74,30 @@ GET http://127.0.0.1:8000/v1/models
 Result: HTTP JSON body {"detail":"Not Found"}
 ```
 
-Corrected current endpoint from user:
+Corrected endpoint from user during the initial audit:
 
 ```text
 GET http://127.0.0.1:8002/v1/models
 Result: curl error 56, Recv failure: Connection reset by peer
 ```
 
-This means the local server was not verified as healthy during the initial audit.
+Later verification after fixing the local vLLM compose:
+
+```text
+GET http://127.0.0.1:8002/v1/models
+Result: healthy. The response reports model id qwen35-local and max_model_len 32768.
+```
+
+The healthy local server uses host base URL `http://127.0.0.1:8002/v1`, served model `qwen35-local`, GPU memory utilization `0.90`, and `TRITON_ATTN` for attention instead of FlashAttention.
+
+## Normal CLI Implementation Findings
+
+- The clean external branding layer is a new `codex-qwen` Rust crate plus `qwen-codex` and `qwencodex` native/npm command entrypoints. The wrapper delegates normal execution back to the upstream `codex` binary and passes config overrides instead of forking the agent architecture.
+- Bare prompts are routed to `codex exec --skip-git-repo-check`, so normal mode continues to use upstream session, tool, MCP, shell, file-editing, and context compaction logic.
+- Qwen config belongs in the wrapper crate. Runtime defaults are centralized in `codex-rs/qwen/src/config.rs`; `.env.example` and `modelo/` document the verified local values.
+- vLLM `/v1/models` returns the OpenAI-compatible `{"object":"list","data":[...]}` shape, while Codex's model metadata manager expects the Codex model catalog shape. Custom providers with `requires_openai_auth = false` should not inherit the user's OpenAI auth manager; this avoids trying to refresh Codex backend model metadata for local vLLM while preserving first-party OpenAI behavior.
+- The verified Qwen/vLLM Responses API still produced reasoning-only streams in this environment despite the server-side `enable_thinking=false` fix. Qwen Codex therefore adds a provider-name-scoped compatibility shim that moves `developer` messages into `instructions` and synthesizes final assistant text from Qwen reasoning-only output when needed.
+- Direct Chat Completions against the same server returned `4` for the arithmetic smoke prompt. The final Qwen Codex normal-mode smoke also returned visible assistant text `4` through `qwen-codex`.
 
 ## External Source Notes
 
@@ -90,4 +106,3 @@ This means the local server was not verified as healthy during the initial audit
 - vLLM latest docs include Responses API compatibility with OpenAI's Responses API. Source: https://docs.vllm.ai/en/latest/serving/openai_compatible_server/
 - vLLM Qwen3 reasoning parser docs describe a Qwen3/Qwen3.5 reasoning parser. Source: https://docs.vllm.ai/en/v0.19.1/api/vllm/reasoning/qwen3_reasoning_parser/
 - vLLM tool-calling docs list parser flags such as `--tool-call-parser` and model-specific parser names. Source: https://docs.vllm.ai/en/latest/features/tool_calling/
-

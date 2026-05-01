@@ -38,6 +38,9 @@ use crate::mentions::collect_explicit_plugin_mentions;
 use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
+use crate::qwen_compat::is_qwen_provider_name;
+use crate::qwen_compat::qwen_reasoning_text_from_item;
+use crate::qwen_compat::synthesize_qwen_reasoning_only_message;
 use crate::resolve_skill_dependencies_for_turn;
 use crate::session::PreviousTurnSettings;
 use crate::session::session::Session;
@@ -1851,6 +1854,8 @@ async fn try_run_sampling_request(
     let plan_mode = turn_context.collaboration_mode.mode == ModeKind::Plan;
     let mut assistant_message_stream_parsers = AssistantMessageStreamParsers::new(plan_mode);
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
+    let qwen_responses_compat = is_qwen_provider_name(&turn_context.provider.info().name);
+    let mut qwen_reasoning_text = String::new();
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -1895,6 +1900,27 @@ async fn try_run_sampling_request(
         match event {
             ResponseEvent::Created => {}
             ResponseEvent::OutputItemDone(item) => {
+                if qwen_responses_compat {
+                    match &item {
+                        ResponseItem::Message { .. } => {}
+                        ResponseItem::Reasoning { .. } => {
+                            if let Some(text) = qwen_reasoning_text_from_item(&item) {
+                                qwen_reasoning_text = text;
+                            }
+                        }
+                        ResponseItem::LocalShellCall { .. }
+                        | ResponseItem::FunctionCall { .. }
+                        | ResponseItem::ToolSearchCall { .. }
+                        | ResponseItem::FunctionCallOutput { .. }
+                        | ResponseItem::CustomToolCall { .. }
+                        | ResponseItem::CustomToolCallOutput { .. }
+                        | ResponseItem::ToolSearchOutput { .. }
+                        | ResponseItem::WebSearchCall { .. }
+                        | ResponseItem::ImageGenerationCall { .. }
+                        | ResponseItem::Compaction { .. }
+                        | ResponseItem::Other => {}
+                    }
+                }
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
                     && let Ok(Some(event)) = consumer.finish()
                 {
@@ -2094,6 +2120,32 @@ async fn try_run_sampling_request(
                 if let Some(false) = end_turn {
                     needs_follow_up = true;
                 }
+                if qwen_responses_compat
+                    && last_agent_message.is_none()
+                    && let Some(item) = synthesize_qwen_reasoning_only_message(&qwen_reasoning_text)
+                {
+                    let mut ctx = HandleOutputCtx {
+                        sess: sess.clone(),
+                        turn_context: turn_context.clone(),
+                        tool_runtime: tool_runtime.clone(),
+                        cancellation_token: cancellation_token.child_token(),
+                    };
+                    match handle_output_item_done(&mut ctx, item, None)
+                        .instrument(handle_responses)
+                        .await
+                    {
+                        Ok(output_result) => {
+                            if let Some(agent_message) = output_result.last_agent_message {
+                                last_agent_message = Some(agent_message);
+                            }
+                            needs_follow_up |= output_result.needs_follow_up;
+                            if let Some(tool_future) = output_result.tool_future {
+                                in_flight.push_back(tool_future);
+                            }
+                        }
+                        Err(err) => break Err(err),
+                    }
+                }
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
                     last_agent_message,
@@ -2180,6 +2232,9 @@ async fn try_run_sampling_request(
                 delta,
                 content_index,
             } => {
+                if qwen_responses_compat {
+                    qwen_reasoning_text.push_str(&delta);
+                }
                 if let Some(active) = active_item.as_ref() {
                     let event = ReasoningRawContentDeltaEvent {
                         thread_id: sess.conversation_id.to_string(),
