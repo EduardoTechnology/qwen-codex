@@ -69,5 +69,5 @@
 - Files changed summary: added `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` and `--yolo-round-timeout-secs`, stopped YOLO cleanly with `round_timeout` when one agent round exceeds the configured limit, set the upstream Codex child to kill on future drop, changed JSON log redaction to operate on serde values before serialization, added timeout/logging tests with raw newlines, control characters, ANSI sequences, and `.env`-style secrets, and documented timeout behavior.
 - Tests run: `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo`; `cargo build -p codex-cli`; `qwen-codex --yolo-refiner --iterations 5 --yolo-round-timeout-secs 1 ...` in `/tmp/yolo-timeout-smoke`; `python3 -m json.tool run.json`; `python3 -m json.tool iteration-001.json`; `cd codex-rs && just fix -p codex-qwen`.
 - Result: focused YOLO tests passed, the native CLI built, the timeout smoke exited `0` after one iteration with `round_timeout`, the refiner was not called after timeout, and both JSON logs parsed successfully.
-- Commit hash: pending.
+- Commit hash: `02af23468c765c7dd78e0666fc70cf40820a2642`.
 - Next step: rerun the five-round ecommerce UX test after this fix is committed and pushed.
