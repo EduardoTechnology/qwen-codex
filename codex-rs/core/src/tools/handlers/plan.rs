@@ -9,8 +9,10 @@ use crate::tools::registry::ToolKind;
 use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::plan_tool::PlanItemArg;
 use codex_protocol::plan_tool::UpdatePlanArgs;
 use codex_protocol::protocol::EventMsg;
+use serde_json::Map as JsonMap;
 use serde_json::Value as JsonValue;
 
 pub struct PlanHandler;
@@ -96,7 +98,71 @@ pub(crate) async fn handle_update_plan(
 }
 
 fn parse_update_plan_arguments(arguments: &str) -> Result<UpdatePlanArgs, FunctionCallError> {
-    serde_json::from_str::<UpdatePlanArgs>(arguments).map_err(|e| {
+    let value = serde_json::from_str::<JsonValue>(arguments).map_err(|e| {
+        FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
+    })?;
+    parse_update_plan_value(value).map_err(|e| {
         FunctionCallError::RespondToModel(format!("failed to parse function arguments: {e}"))
     })
+}
+
+fn parse_update_plan_value(value: JsonValue) -> serde_json::Result<UpdatePlanArgs> {
+    let Some(object) = value.as_object() else {
+        return serde_json::from_value::<UpdatePlanArgs>(value);
+    };
+    let Some(plan) = object.get("plan").and_then(JsonValue::as_array) else {
+        return serde_json::from_value::<UpdatePlanArgs>(value);
+    };
+
+    let mut sanitized = JsonMap::new();
+    if let Some(explanation) = object.get("explanation") {
+        sanitized.insert("explanation".to_string(), explanation.clone());
+    }
+    let mut sanitized_plan = Vec::with_capacity(plan.len());
+    for item in plan {
+        let Some(item_object) = item.as_object() else {
+            return serde_json::from_value::<UpdatePlanArgs>(JsonValue::Object(sanitized));
+        };
+        let mut sanitized_item = JsonMap::new();
+        if let Some(step) = item_object.get("step") {
+            sanitized_item.insert("step".to_string(), step.clone());
+        }
+        if let Some(status) = item_object.get("status") {
+            sanitized_item.insert("status".to_string(), status.clone());
+        }
+        serde_json::from_value::<PlanItemArg>(JsonValue::Object(sanitized_item.clone()))?;
+        sanitized_plan.push(JsonValue::Object(sanitized_item));
+    }
+    sanitized.insert("plan".to_string(), JsonValue::Array(sanitized_plan));
+    serde_json::from_value::<UpdatePlanArgs>(JsonValue::Object(sanitized))
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+    #[test]
+    fn update_plan_unknown_field_is_ignored() {
+        let parsed = parse_update_plan_arguments(
+            r#"{"explanation":"x","plan":[{"step":"Seed products","status":"pending","seed":true}]}"#,
+        )
+        .unwrap();
+
+        assert_eq!(parsed.plan.len(), 1);
+        assert_eq!(parsed.plan[0].step, "Seed products");
+        assert!(matches!(
+            parsed.plan[0].status,
+            codex_protocol::plan_tool::StepStatus::Pending
+        ));
+        assert_eq!(parsed.explanation, Some("x".to_string()));
+    }
+
+    #[test]
+    fn update_plan_missing_required_fields_is_controlled_error() {
+        let error =
+            parse_update_plan_arguments(r#"{"plan":[{"step":"Seed products"}]}"#).unwrap_err();
+
+        assert!(matches!(error, FunctionCallError::RespondToModel(_)));
+    }
 }

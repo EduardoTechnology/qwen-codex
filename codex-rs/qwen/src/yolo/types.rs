@@ -29,6 +29,7 @@ pub(crate) struct AgentRoundRequest {
 pub(crate) struct AgentRoundResult {
     pub session_id: Option<String>,
     pub exit_code: Option<i32>,
+    pub exit_signal: Option<String>,
     pub final_response: Option<String>,
     pub actions_taken: Vec<String>,
     pub tool_calls: Vec<String>,
@@ -75,6 +76,16 @@ pub(crate) enum YoloStopReason {
     RefinerError,
     RoundTimeout,
     Interrupted,
+    AgentError,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RefinerSkippedReason {
+    Interrupted,
+    Timeout,
+    AgentError,
+    MissingAgentOutput,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -123,6 +134,13 @@ pub(crate) struct YoloIterationLog {
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
     pub current_git_status: String,
+    pub interrupt_received: bool,
+    pub timeout_occurred: bool,
+    pub agent_process_exit_code: Option<i32>,
+    pub agent_process_signal: Option<String>,
+    pub agent_round_duration_seconds: u64,
+    pub agent_finished_normally: bool,
+    pub refiner_skipped_reason: Option<RefinerSkippedReason>,
     #[serde(rename = "refinerRequestSummary")]
     pub refiner_input_summary: Option<String>,
     #[serde(rename = "refinerResponse")]

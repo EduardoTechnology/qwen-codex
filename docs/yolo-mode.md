@@ -79,12 +79,15 @@ The loop stops when:
 
 - The fixed iteration limit is reached.
 - A single agent round exceeds `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS`, which defaults to 600 seconds.
+- The normal Codex agent subprocess exits nonzero without an explicit YOLO interrupt.
 - The refiner returns `YOLO_STOP`.
 - The repeated-prompt guard triggers.
 - The consecutive-failure guard triggers.
 - Ctrl+C is received; the process stops cleanly between rounds.
 
 When a round times out, YOLO stops the run instead of trying to refine from an incomplete agent result. The iteration log records `stopReason: "round_timeout"` and an error such as `agent round timed out after 600 second(s)`. This prevents a stuck local model/tool turn from blocking unattended runs forever.
+
+When the child Codex process exits nonzero without an explicit Ctrl+C/SIGTERM observed by the YOLO wrapper, YOLO records `stopReason: "agent_error"`, stores the exit code and a sanitized output/stderr excerpt, skips the refiner for that failed round, writes all logs, and stops cleanly. If an explicit interrupt was received, the run records `stopReason: "interrupted"` instead. The per-iteration fields `interruptReceived`, `timeoutOccurred`, `agentProcessExitCode`, `agentProcessSignal`, `agentRoundDurationSeconds`, `agentFinishedNormally`, and `refinerSkippedReason` make the distinction visible.
 
 ## Logging
 
@@ -99,6 +102,8 @@ Files written:
 ```text
 run.json
 run.md
+analysis.json
+analysis.md
 iteration-001.json
 iteration-001.md
 iteration-002.json
@@ -119,6 +124,9 @@ Iteration logs include:
 - Commands/tests run
 - Errors
 - Current git status
+- Agent subprocess exit code/signal
+- Timeout and interrupt flags
+- Refiner skipped reason
 - Refiner input summary
 - Refiner raw response
 - Next prompt injected into the agent
@@ -127,6 +135,10 @@ Iteration logs include:
 Secrets are redacted before logs are written. The redactor covers common API keys, tokens, authorization headers, `.env` style secret assignments, credential fields, and private key blocks.
 
 JSON logs are redacted field-by-field before serialization, so raw newlines, ANSI escape sequences, interrupted output, and secret-like `.env` assignments remain valid JSON. Markdown logs are for human review only.
+
+`analysis.json` is a compact whole-run summary designed for automation. It includes completed iteration count, final status, per-round previews, refiner call status, round-chaining checks, important project artifacts, secret-redaction checks, and diagnostics grouped as timeouts, interruptions, agent errors, provider errors, and refiner errors. `analysis.md` is the same review in a concise human-readable form.
+
+The refiner receives bounded context derived from the latest iteration summary, changed files, errors, git status, and diff summary. Qwen Codex avoids passing full raw logs or large shell heredocs into the refiner request.
 
 ## Refiner Prompt
 

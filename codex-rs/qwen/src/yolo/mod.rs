@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
+use std::time::Instant;
 
 use anyhow::Context;
 use codex_arg0::Arg0DispatchPaths;
@@ -29,6 +30,7 @@ use crate::yolo::types::AgentRoundRequest;
 use crate::yolo::types::AgentRoundResult;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
+use crate::yolo::types::RefinerSkippedReason;
 use crate::yolo::types::YoloIterationLog;
 use crate::yolo::types::YoloLoopConfig;
 use crate::yolo::types::YoloRunLog;
@@ -36,6 +38,7 @@ use crate::yolo::types::YoloRunOutcome;
 use crate::yolo::types::YoloStopReason;
 
 mod agent;
+mod analysis;
 mod logging;
 mod refiner;
 mod types;
@@ -127,7 +130,7 @@ where
         stop_reason: None,
         iterations: Vec::new(),
     };
-    logger.write_run(&run_log).await?;
+    write_run_and_analysis(&logger, &run_log).await?;
 
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
     let mut current_prompt = config.original_prompt.clone();
@@ -170,6 +173,7 @@ where
             prompt: current_prompt.clone(),
             thread_id: session_id.clone(),
         };
+        let agent_started_at = Instant::now();
         let agent_result = match tokio::time::timeout(
             Duration::from_secs(config.round_timeout_secs),
             run_agent(agent_request),
@@ -179,6 +183,7 @@ where
             Ok(result) => result,
             Err(_) => Ok(agent_round_timeout_result(config.round_timeout_secs)),
         };
+        let agent_round_duration_seconds = agent_started_at.elapsed().as_secs();
         let current_git_status = git_status(&cwd).await;
         let mut git_changed_files = changed_files_from_git_status(&current_git_status);
         if git_changed_files.is_empty() {
@@ -205,6 +210,16 @@ where
         } else {
             consecutive_failures = 0;
         }
+        let interrupt_received = interrupted(&config);
+        let timeout_occurred = agent_result.timed_out;
+        let agent_process_exit_code = agent_result.exit_code;
+        let agent_process_signal = agent_result.exit_signal.clone();
+        let agent_exited_with_error =
+            agent_result.exit_code.is_some_and(|code| code != 0) || agent_process_signal.is_some();
+        let agent_finished_normally = agent_result.exit_code == Some(0)
+            && agent_process_signal.is_none()
+            && !timeout_occurred
+            && !agent_failed;
 
         if session_id.is_none() {
             session_id = agent_result.session_id.clone();
@@ -233,6 +248,13 @@ where
             commands_tests_run: agent_result.commands_tests_run.clone(),
             errors: agent_result.errors.clone(),
             current_git_status,
+            interrupt_received,
+            timeout_occurred,
+            agent_process_exit_code,
+            agent_process_signal,
+            agent_round_duration_seconds,
+            agent_finished_normally,
+            refiner_skipped_reason: None,
             refiner_input_summary: None,
             refiner_raw_response: None,
             refiner_error: None,
@@ -240,22 +262,9 @@ where
             stop_reason: None,
         };
 
-        if interrupted(&config) {
-            iteration_log.stop_reason = Some(YoloStopReason::Interrupted);
-            iterations_completed = iteration;
-            write_iteration(&logger, &mut run_log, iteration_log).await?;
-            finish_run(
-                &logger,
-                &mut run_log,
-                iterations_completed,
-                YoloStopReason::Interrupted,
-            )
-            .await?;
-            break;
-        }
-
         if agent_result.timed_out {
             iteration_log.stop_reason = Some(YoloStopReason::RoundTimeout);
+            iteration_log.refiner_skipped_reason = Some(RefinerSkippedReason::Timeout);
             iterations_completed = iteration;
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -268,8 +277,39 @@ where
             break;
         }
 
+        if interrupt_received {
+            iteration_log.stop_reason = Some(YoloStopReason::Interrupted);
+            iteration_log.refiner_skipped_reason = Some(RefinerSkippedReason::Interrupted);
+            iterations_completed = iteration;
+            write_iteration(&logger, &mut run_log, iteration_log).await?;
+            finish_run(
+                &logger,
+                &mut run_log,
+                iterations_completed,
+                YoloStopReason::Interrupted,
+            )
+            .await?;
+            break;
+        }
+
+        if agent_exited_with_error {
+            iteration_log.stop_reason = Some(YoloStopReason::AgentError);
+            iteration_log.refiner_skipped_reason = Some(RefinerSkippedReason::AgentError);
+            iterations_completed = iteration;
+            write_iteration(&logger, &mut run_log, iteration_log).await?;
+            finish_run(
+                &logger,
+                &mut run_log,
+                iterations_completed,
+                YoloStopReason::AgentError,
+            )
+            .await?;
+            break;
+        }
+
         if consecutive_failures >= config.max_failures {
             iteration_log.stop_reason = Some(YoloStopReason::FailureGuard);
+            iteration_log.refiner_skipped_reason = Some(RefinerSkippedReason::AgentError);
             iterations_completed = iteration;
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -402,7 +442,7 @@ async fn write_iteration(
 ) -> anyhow::Result<()> {
     logger.write_iteration(&iteration_log).await?;
     run_log.iterations.push(iteration_log);
-    logger.write_run(run_log).await
+    write_run_and_analysis(logger, run_log).await
 }
 
 async fn finish_run(
@@ -413,7 +453,12 @@ async fn finish_run(
 ) -> anyhow::Result<()> {
     run_log.completed_at = Some(now_timestamp());
     run_log.stop_reason = Some(reason);
-    logger.write_run(run_log).await
+    write_run_and_analysis(logger, run_log).await
+}
+
+async fn write_run_and_analysis(logger: &YoloLogger, run_log: &YoloRunLog) -> anyhow::Result<()> {
+    logger.write_run(run_log).await?;
+    logger.write_analysis(run_log).await
 }
 
 fn build_refiner_summary(iteration: &YoloIterationLog) -> String {
@@ -600,6 +645,7 @@ mod tests {
     fn agent_result(session_id: &str) -> AgentRoundResult {
         AgentRoundResult {
             session_id: Some(session_id.to_string()),
+            exit_code: Some(0),
             final_response: Some("done".to_string()),
             ..AgentRoundResult::default()
         }
@@ -645,9 +691,124 @@ mod tests {
             Some(YoloStopReason::RoundTimeout)
         );
         assert_eq!(
+            iteration_log.refiner_skipped_reason,
+            Some(RefinerSkippedReason::Timeout)
+        );
+        assert!(iteration_log.timeout_occurred);
+        assert!(!iteration_log.agent_finished_normally);
+        assert_eq!(
             iteration_log.errors,
             vec!["agent round timed out after 0 second(s)".to_string()]
         );
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_exit_zero_is_refiner_eligible() {
+        let temp = TempDir::new().unwrap();
+        let refiner_calls = Rc::new(RefCell::new(0_u32));
+        let refiner_calls_for_refiner = refiner_calls.clone();
+
+        let outcome = run_yolo_loop(
+            loop_config(&temp, Some(1)),
+            |_| async { Ok(agent_result("session-1")) },
+            move |_| {
+                let refiner_calls = refiner_calls_for_refiner.clone();
+                async move {
+                    *refiner_calls.borrow_mut() += 1;
+                    Ok(RefinerResponse {
+                        raw_response: "next".to_string(),
+                        next_prompt: "Keep going".to_string(),
+                    })
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        assert_eq!(*refiner_calls.borrow(), 1);
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_exit_one_is_agent_error_not_interrupted() {
+        let temp = TempDir::new().unwrap();
+        let refiner_calls = Rc::new(RefCell::new(0_u32));
+        let refiner_calls_for_refiner = refiner_calls.clone();
+
+        let outcome = run_yolo_loop(
+            loop_config(&temp, None),
+            |_| async {
+                Ok(AgentRoundResult {
+                    exit_code: Some(1),
+                    errors: vec!["agent process exited with code 1".to_string()],
+                    ..AgentRoundResult::default()
+                })
+            },
+            move |_| {
+                let refiner_calls = refiner_calls_for_refiner.clone();
+                async move {
+                    *refiner_calls.borrow_mut() += 1;
+                    Ok(RefinerResponse {
+                        raw_response: "unused".to_string(),
+                        next_prompt: "unused".to_string(),
+                    })
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.stop_reason, YoloStopReason::AgentError);
+        assert_eq!(*refiner_calls.borrow(), 0);
+
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(iteration_log.stop_reason, Some(YoloStopReason::AgentError));
+        assert_eq!(
+            iteration_log.refiner_skipped_reason,
+            Some(RefinerSkippedReason::AgentError)
+        );
+        assert_eq!(iteration_log.agent_process_exit_code, Some(1));
+        assert!(!iteration_log.interrupt_received);
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_interrupt_after_round_is_classified_as_interrupted() {
+        let temp = TempDir::new().unwrap();
+        let interrupt = Arc::new(AtomicBool::new(false));
+        let interrupt_for_agent = interrupt.clone();
+        let mut config = loop_config(&temp, None);
+        config.interrupt_flag = Some(interrupt);
+
+        let outcome = run_yolo_loop(
+            config,
+            move |_| {
+                let interrupt = interrupt_for_agent.clone();
+                async move {
+                    interrupt.store(true, Ordering::SeqCst);
+                    Ok(agent_result("session-1"))
+                }
+            },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "unused".to_string(),
+                    next_prompt: "unused".to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.stop_reason, YoloStopReason::Interrupted);
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(
+            iteration_log.refiner_skipped_reason,
+            Some(RefinerSkippedReason::Interrupted)
+        );
+        assert!(iteration_log.interrupt_received);
     }
 
     #[tokio::test]
@@ -817,6 +978,13 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
             refiner_input_summary: None,
             refiner_raw_response: None,
             refiner_error: None,
@@ -848,6 +1016,13 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: vec!["error".repeat(100_000)],
             current_git_status: "status".repeat(10_000),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
             refiner_input_summary: None,
             refiner_raw_response: None,
             refiner_error: None,

@@ -8,6 +8,8 @@ use serde_json::Value;
 use tokio::fs;
 
 use crate::redaction::redact_text;
+use crate::yolo::analysis::analysis_markdown;
+use crate::yolo::analysis::build_run_analysis;
 use crate::yolo::types::YoloIterationLog;
 use crate::yolo::types::YoloRunLog;
 
@@ -31,6 +33,16 @@ impl YoloLogger {
     pub(crate) async fn write_run(&self, run: &YoloRunLog) -> anyhow::Result<()> {
         write_json_redacted(&self.run_dir.join("run.json"), run).await?;
         write_text_redacted(&self.run_dir.join("run.md"), &run_markdown(run)).await
+    }
+
+    pub(crate) async fn write_analysis(&self, run: &YoloRunLog) -> anyhow::Result<()> {
+        let analysis = build_run_analysis(run);
+        write_json_redacted(&self.run_dir.join("analysis.json"), &analysis).await?;
+        write_text_redacted(
+            &self.run_dir.join("analysis.md"),
+            &analysis_markdown(&analysis),
+        )
+        .await
     }
 
     pub(crate) async fn write_iteration(&self, iteration: &YoloIterationLog) -> anyhow::Result<()> {
@@ -201,6 +213,13 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
             refiner_input_summary: None,
             refiner_raw_response: None,
             refiner_error: None,
@@ -242,6 +261,13 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             current_git_status: String::new(),
+            interrupt_received: true,
+            timeout_occurred: false,
+            agent_process_exit_code: None,
+            agent_process_signal: Some("SIGINT".to_string()),
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: false,
+            refiner_skipped_reason: None,
             refiner_input_summary: None,
             refiner_raw_response: None,
             refiner_error: None,

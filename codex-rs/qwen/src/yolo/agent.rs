@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 use std::path::PathBuf;
+use std::process::ExitStatus;
 use std::process::Stdio;
 
 use anyhow::Context;
@@ -61,8 +62,10 @@ impl CodexAgentRunner {
             )
         })?;
 
+        let status = output.status;
         Ok(parse_agent_output(
-            output.status.code(),
+            status.code(),
+            exit_signal(status),
             &String::from_utf8_lossy(&output.stdout),
             &String::from_utf8_lossy(&output.stderr),
         ))
@@ -97,11 +100,13 @@ pub(crate) fn build_codex_exec_args(
 
 pub(crate) fn parse_agent_output(
     exit_code: Option<i32>,
+    exit_signal: Option<String>,
     stdout: &str,
     stderr: &str,
 ) -> AgentRoundResult {
     let mut result = AgentRoundResult {
         exit_code,
+        exit_signal,
         stdout_tail: tail(stdout, OUTPUT_TAIL_LIMIT),
         stderr_tail: tail(stderr, OUTPUT_TAIL_LIMIT),
         ..AgentRoundResult::default()
@@ -151,6 +156,11 @@ pub(crate) fn parse_agent_output(
     }
     if failed_exit && !stderr.trim().is_empty() {
         result.errors.push(tail(stderr, OUTPUT_TAIL_LIMIT));
+    }
+    if let Some(signal) = &result.exit_signal {
+        result
+            .errors
+            .push(format!("agent process exited from {signal}"));
     }
 
     result.changed_files.extend(changed_files);
@@ -285,18 +295,42 @@ async fn run_git<const N: usize>(cwd: &Path, args: [&str; N]) -> String {
 pub(crate) fn summarize_agent_result(result: &AgentRoundResult) -> String {
     let mut lines = Vec::new();
     if let Some(response) = &result.final_response {
-        lines.push(format!("Final response: {}", tail(response, 2_000)));
+        lines.push(format!(
+            "Final response: {}",
+            sanitize_summary_text(&tail(response, 1_200))
+        ));
     }
     if !result.actions_taken.is_empty() {
-        lines.push(format!("Actions: {}", result.actions_taken.join("; ")));
+        lines.push(format!("Actions captured: {}", result.actions_taken.len()));
+    }
+    if !result.commands_tests_run.is_empty() {
+        lines.push(format!(
+            "Commands/tests captured: {}",
+            result.commands_tests_run.len()
+        ));
+    }
+    if !result.changed_files.is_empty() {
+        lines.push(format!(
+            "Changed files: {}",
+            preview_list(&result.changed_files, 12, 600)
+        ));
     }
     if !result.errors.is_empty() {
-        lines.push(format!("Errors: {}", result.errors.join("; ")));
+        lines.push(format!(
+            "Important errors: {}",
+            preview_list(&result.errors, 4, 1_000)
+        ));
+    }
+    if result.final_response.is_none() && !result.stdout_tail.trim().is_empty() {
+        lines.push(format!(
+            "Output preview: {}",
+            sanitize_summary_text(&tail(&result.stdout_tail, 900))
+        ));
     }
     if lines.is_empty() {
         lines.push("No final assistant message or structured action was captured.".to_string());
     }
-    lines.join("\n")
+    tail(&lines.join("\n"), 2_500)
 }
 
 pub(crate) fn tail(value: &str, max_chars: usize) -> String {
@@ -309,6 +343,62 @@ pub(crate) fn tail(value: &str, max_chars: usize) -> String {
         .skip(total.saturating_sub(max_chars))
         .collect::<String>();
     format!("[truncated]\n{tail}")
+}
+
+fn preview_list(values: &[String], max_items: usize, max_chars: usize) -> String {
+    let mut items = values
+        .iter()
+        .take(max_items)
+        .map(|value| sanitize_summary_text(&tail(value, 180)))
+        .collect::<Vec<_>>();
+    if values.len() > max_items {
+        items.push(format!("and {} more", values.len() - max_items));
+    }
+    tail(&items.join("; "), max_chars)
+}
+
+fn sanitize_summary_text(value: &str) -> String {
+    strip_ansi_sequences(value)
+        .chars()
+        .filter_map(|ch| match ch {
+            '\n' | '\r' | '\t' => Some(' '),
+            ch if ch.is_control() => None,
+            ch => Some(ch),
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn strip_ansi_sequences(value: &str) -> String {
+    let mut output = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for next in chars.by_ref() {
+                if ('@'..='~').contains(&next) {
+                    break;
+                }
+            }
+            continue;
+        }
+        output.push(ch);
+    }
+    output
+}
+
+#[cfg(unix)]
+fn exit_signal(status: ExitStatus) -> Option<String> {
+    use std::os::unix::process::ExitStatusExt;
+
+    status.signal().map(|signal| format!("signal {signal}"))
+}
+
+#[cfg(not(unix))]
+fn exit_signal(_status: ExitStatus) -> Option<String> {
+    None
 }
 
 #[cfg(test)]
@@ -327,13 +417,14 @@ mod tests {
         ]
         .join("\n");
 
-        let parsed = parse_agent_output(Some(0), &stdout, "");
+        let parsed = parse_agent_output(Some(0), None, &stdout, "");
 
         assert_eq!(
             parsed,
             AgentRoundResult {
                 session_id: Some("thread-1".to_string()),
                 exit_code: Some(0),
+                exit_signal: None,
                 final_response: Some("done".to_string()),
                 actions_taken: vec![
                     "command: cargo test".to_string(),
@@ -401,5 +492,43 @@ mod tests {
                 "Continue",
             ]
         );
+    }
+
+    #[test]
+    fn agent_output_summary_bounds_heredoc_heavy_output() {
+        let result = AgentRoundResult {
+            final_response: Some("Created files".to_string()),
+            actions_taken: vec![
+                "command: cat << 'EOF'\nvery long heredoc\nEOF".repeat(100),
+                "file change: README.md".to_string(),
+            ],
+            commands_tests_run: vec!["cat << 'EOF'\nlarge\nEOF".repeat(100)],
+            changed_files: vec!["README.md".to_string(), "backend/server.js".to_string()],
+            ..AgentRoundResult::default()
+        };
+
+        let summary = summarize_agent_result(&result);
+
+        assert!(summary.contains("Actions captured: 2"));
+        assert!(summary.contains("Commands/tests captured: 1"));
+        assert!(summary.contains("README.md"));
+        assert!(!summary.contains("very long heredoc"));
+        assert!(summary.chars().count() <= 2_500);
+    }
+
+    #[test]
+    fn agent_output_summary_normalizes_control_sequences_and_nested_quotes() {
+        let result = AgentRoundResult {
+            final_response: Some("done\u{1b}[31m red\u{1b}[0m \u{0003}".to_string()),
+            errors: vec!["nested '`quoted`' error\nwith newline".to_string()],
+            ..AgentRoundResult::default()
+        };
+
+        let summary = summarize_agent_result(&result);
+
+        assert!(summary.contains("done red"));
+        assert!(summary.contains("nested '`quoted`' error with newline"));
+        assert!(!summary.contains('\u{1b}'));
+        assert!(!summary.contains('\u{0003}'));
     }
 }

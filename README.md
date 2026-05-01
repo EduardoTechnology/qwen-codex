@@ -94,7 +94,9 @@ qwen-codex --yolo-refiner -n 3 "Improve tests and docs."
 
 `--yolo-refiner` is the preferred explicit flag. `--yolo` remains supported for compatibility, but upstream Codex also uses `--yolo` as an alias for `--dangerously-bypass-approvals-and-sandbox`.
 
-YOLO stops when the iteration limit is reached, the refiner returns `YOLO_STOP`, the repeated-prompt guard triggers, the failure guard triggers, or Ctrl+C is received. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as both JSON and Markdown, with secrets redacted.
+YOLO stops when the iteration limit is reached, one round times out, the agent subprocess exits with an error, the refiner returns `YOLO_STOP`, the repeated-prompt guard triggers, the failure guard triggers, or Ctrl+C is received. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as JSON and Markdown, with secrets redacted.
+
+Each run also writes `analysis.json` and `analysis.md`, which summarize stop reason, round chaining, agent subprocess status, refiner calls, changed files, and diagnostics in one place.
 
 For unattended local experiments, approvals and sandboxing are bypassed only when explicitly requested:
 
@@ -119,7 +121,7 @@ QWEN_CODEX_YOLO_MAX_FAILURES=3
 
 Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless `--iterations` or `-n` is provided.
 
-`QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` prevents a single Codex agent round from blocking the autonomous loop forever. The default is 600 seconds. On timeout, YOLO kills the round, writes valid JSON/Markdown logs, and stops with `round_timeout`.
+`QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` prevents a single Codex agent round from blocking the autonomous loop forever. The default is 600 seconds. On timeout, YOLO kills the round, writes valid JSON/Markdown/analysis logs, skips the refiner, and stops with `round_timeout`.
 
 ## Safety Notes
 

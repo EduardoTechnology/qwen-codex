@@ -71,3 +71,12 @@
 - Result: focused YOLO tests passed, the native CLI built, the timeout smoke exited `0` after one iteration with `round_timeout`, the refiner was not called after timeout, and both JSON logs parsed successfully.
 - Commit hash: `02af23468c765c7dd78e0666fc70cf40820a2642`.
 - Next step: rerun the five-round ecommerce UX test after this fix is committed and pushed.
+
+## 2026-05-01T23:49:00Z
+
+- Objective: fix YOLO blocker exposed by ecommerce logs before rerunning the five-round UX test.
+- Files changed summary: separated YOLO timeout, explicit interrupt, and nonzero child-process exit classification; added `agent_error` stop reason and refiner skipped reasons; added per-iteration subprocess diagnostics; added unified `analysis.json` and `analysis.md`; made `agentOutputSummary` concise and bounded; made the `update_plan` parser ignore extra model-generated fields such as `seed` while preserving required-field validation; updated YOLO docs and verification notes.
+- Tests run: `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo -- --nocapture`; `cargo test -p codex-core unknown_field -- --nocapture`; `cargo build -p codex-cli`; timeout smoke in `/tmp/qwen-yolo-timeout-analysis`; agent-error smoke in `/tmp/qwen-yolo-agent-error`; `python3 -m json.tool` for generated `run.json`, `iteration-001.json`, and `analysis.json`.
+- Result: focused tests passed. Timeout smoke stopped with `round_timeout` and valid JSON/analysis logs. Agent-error smoke stopped with `agent_error`, `agentProcessExitCode == 1`, and `refinerSkippedReason == "agent_error"`. The old ecommerce `filesystem` MCP message was determined to be a model-requested non-existent MCP server in this config, not a YOLO-only missing tool setup.
+- Commit hash: `PENDING`.
+- Next step: commit and push these fixes, record the hash, then rerun the five-round ecommerce YOLO test with `--yolo-round-timeout-secs 1200`.

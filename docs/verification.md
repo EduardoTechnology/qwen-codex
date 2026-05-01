@@ -162,6 +162,54 @@ Fix verification:
 
 The ecommerce project itself was not evaluated further in this pass. The next planned step is to rerun the five-round ecommerce test after this timeout/logging fix is committed and pushed.
 
+## YOLO Agent Error Classification And Analysis Logs
+
+Old ecommerce run inspected:
+
+```text
+Copied logs: /mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/ecommerce-interrupted-20260501T214039Z-1577146
+Original logs: /tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260501T214039Z-1577146
+```
+
+Findings:
+
+- The round generated real project files, then the child Codex process exited with code `1`.
+- The old iteration log contained `resources/templates/list failed: unknown MCP server 'filesystem'`.
+- The old iteration log contained `failed to parse function arguments: unknown field 'seed', expected 'step' or 'status'`.
+- The wrapper also had an interrupt marker from the manual stop attempt, so the old `stopReason: "interrupted"` was ambiguous.
+- The refiner was skipped because the run stopped before a clean agent handoff.
+
+Fix verification:
+
+- `cd codex-rs && cargo test -p codex-qwen yolo -- --nocapture`: passed, 31 tests.
+- `cd codex-rs && cargo test -p codex-core unknown_field -- --nocapture`: passed, 1 matching test.
+- `cd codex-rs && cargo build -p codex-cli`: passed.
+- Timeout smoke workspace: `/tmp/qwen-yolo-timeout-analysis`.
+- Timeout smoke log path: `/tmp/qwen-yolo-timeout-analysis/.qwen-codex/yolo-runs/20260501T235704Z-1822173`.
+- Timeout smoke JSON validation: `run.json`, `iteration-001.json`, and `analysis.json` parsed with `python3 -m json.tool`.
+- Timeout parsed result: `stopReason == "round_timeout"`, `refinerSkippedReason == "timeout"`, `analysis.finalStatus == "timeout"`.
+- Agent-error smoke workspace: `/tmp/qwen-yolo-agent-error`.
+- Agent-error smoke log path: `/tmp/qwen-yolo-agent-error/.qwen-codex/yolo-runs/20260501T235722Z-1822875`.
+- Agent-error parsed result: `run.json.stopReason == "agent_error"`, `iteration-001.json.stopReason == "agent_error"`, `agentProcessExitCode == 1`, and `refinerSkippedReason == "agent_error"`.
+
+MCP/filesystem conclusion:
+
+- Normal Qwen Codex and YOLO both invoke the upstream Codex agent path through `codex exec`.
+- The logged `filesystem` MCP name was not a default registered server in this configuration. It appears to be a model-requested MCP resource server name rather than a missing YOLO-only setup path.
+- The fix does not add a separate filesystem MCP implementation. YOLO continues to rely on the same shell/file-editing tools as normal Codex mode.
+
+Malformed `update_plan` argument handling:
+
+- Extra model-generated fields such as `seed` in `update_plan.plan[]` are now ignored for that narrow tool parser.
+- Required `step` and `status` fields still remain validated.
+- Missing required fields still return a controlled tool error.
+
+Unified analysis logs:
+
+- New runs write `analysis.json` and `analysis.md` next to `run.json`, `run.md`, and per-iteration logs.
+- `analysis.json` records whole-run status, round chaining, refiner call status, subprocess exit fields, timeouts, interruptions, agent errors, provider/refiner errors, and important project artifacts.
+- The five-round ecommerce test is still pending after this fix commit.
+
 ## Context Management
 
 Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.
