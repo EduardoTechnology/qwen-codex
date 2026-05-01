@@ -25,3 +25,4 @@ tokio = { workspace = true, features = ["fs", "io-util", "process", "time"] }
 [dev-dependencies]
 pretty_assertions = { workspace = true }
 tempfile = { workspace = true }
+wiremock = { workspace = true }

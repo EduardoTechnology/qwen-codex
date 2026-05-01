@@ -429,4 +429,51 @@ mod tests {
         assert!(overrides.contains("env_key = \"QWEN_CODEX_API_KEY\""));
         assert!(!overrides.contains("secret-key"));
     }
+
+    #[test]
+    fn resolves_yolo_refiner_and_guard_config() {
+        let env = HashMap::from([
+            (
+                "QWEN_CODEX_YOLO_REFINER_BASE_URL".to_string(),
+                "http://refiner/v1".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REFINER_API_KEY".to_string(),
+                "refiner-key".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REFINER_MODEL".to_string(),
+                "refiner-model".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_LOG_DIR".to_string(),
+                ".custom-yolo".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS".to_string(),
+                "7".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS".to_string(),
+                "4".to_string(),
+            ),
+            ("QWEN_CODEX_YOLO_MAX_FAILURES".to_string(), "2".to_string()),
+        ]);
+
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+
+        assert_eq!(
+            config.yolo,
+            ResolvedYoloConfig {
+                refiner_base_url: "http://refiner/v1".to_string(),
+                refiner_api_key: "refiner-key".to_string(),
+                refiner_model: "refiner-model".to_string(),
+                log_dir: PathBuf::from(".custom-yolo"),
+                default_iterations: Some(7),
+                max_repeated_prompts: 4,
+                max_failures: 2,
+            }
+        );
+    }
 }

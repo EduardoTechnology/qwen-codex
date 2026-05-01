@@ -17,3 +17,12 @@
 - Result: normal CLI milestone verified. Local vLLM baseline is healthy at `http://127.0.0.1:8002/v1` with `qwen35-local`, 32768 context, GPU memory utilization `0.90`, `TRITON_ATTN`, and the normal model call returned visible assistant text `4`.
 - Commit hash: `720cc740f04c3e5fbb6de9a0e7d1bb3c8d7e6cb9`.
 - Next step: commit and push the normal CLI milestone, then begin YOLO mode in a separate milestone.
+
+## 2026-05-01T20:10:00Z
+
+- Objective: implement YOLO mode as a separate milestone while preserving the normal upstream Codex agent path.
+- Files changed summary: added YOLO loop modules for agent-round delegation, refiner chat-completions client, run/iteration logging, redaction, loop guards, Ctrl+C interrupt handling, CLI/env parser coverage, README YOLO docs, and `docs/yolo-mode.md`.
+- Tests run: `just fmt`; `cargo test -p codex-qwen`; `just fix -p codex-qwen`; `cargo build -p codex-cli`; CLI smoke tests for `qwen-codex --help`, `qwen-codex --version`, `qwencodex --help`, and `qwen-codex --yolo --iterations 0`; `just bazel-lock-update`; `just bazel-lock-check`; `pnpm run format`; `git diff --check`.
+- Result: YOLO unit coverage passes and the native CLI builds. Live end-to-end YOLO against the local vLLM server is still pending.
+- Commit hash: pending.
+- Next step: update dependency locks and formatting, then commit and push the YOLO milestone.

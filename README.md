@@ -1,60 +1,150 @@
-<p align="center"><code>npm i -g @openai/codex</code><br />or <code>brew install --cask codex</code></p>
-<p align="center"><strong>Codex CLI</strong> is a coding agent from OpenAI that runs locally on your computer.
-<p align="center">
-  <img src="https://github.com/openai/codex/blob/main/.github/codex-cli-splash.png" alt="Codex CLI splash" width="80%" />
-</p>
-</br>
-If you want Codex in your code editor (VS Code, Cursor, Windsurf), <a href="https://developers.openai.com/codex/ide">install in your IDE.</a>
-</br>If you want the desktop app experience, run <code>codex app</code> or visit <a href="https://chatgpt.com/codex?app-landing-page=true">the Codex App page</a>.
-</br>If you are looking for the <em>cloud-based agent</em> from OpenAI, <strong>Codex Web</strong>, go to <a href="https://chatgpt.com/codex">chatgpt.com/codex</a>.</p>
+# Qwen Codex
 
----
+Qwen Codex is an Apache-2.0-compatible fork/adaptation of the OpenAI Codex CLI that defaults to a local Qwen model served by vLLM through an OpenAI-compatible API.
+
+It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back into the upstream Codex execution path so shell tools, file editing, skills, MCP support, context compaction, and future upstream improvements remain available.
+
+## Relationship To Upstream
+
+- `origin` is the Qwen Codex repository.
+- `upstream` is the original `openai/codex` repository.
+- Qwen-specific code is kept in a small wrapper layer where practical so upstream merges remain manageable.
+- The license remains Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
 ## Quickstart
 
-### Installing and running Codex CLI
-
-Install globally with your preferred package manager:
-
-```shell
-# Install using npm
-npm install -g @openai/codex
+```sh
+cp .env.example .env
+docker compose -f modelo/docker-compose.qwen35-9b-awq.yml up -d
+curl http://127.0.0.1:8002/v1/models
+cd codex-rs
+cargo build -p codex-cli
+./target/debug/qwen-codex --health
+./target/debug/qwen-codex "What is 2+2? Answer in one word."
 ```
 
-```shell
-# Install using Homebrew
-brew install --cask codex
+The compatibility alias is also built:
+
+```sh
+cd codex-rs
+./target/debug/qwencodex --help
 ```
 
-Then simply run `codex` to get started.
+## Local Qwen/vLLM Setup
 
-<details>
-<summary>You can also go to the <a href="https://github.com/openai/codex/releases/latest">latest GitHub Release</a> and download the appropriate binary for your platform.</summary>
+The verified local baseline is:
 
-Each GitHub Release contains many executables, but in practice, you likely want one of these:
+- Base URL: `http://127.0.0.1:8002/v1`
+- Container port: `8000`
+- Host port: `8002`
+- Served model: `qwen35-local`
+- Model repository: `QuantTrio/Qwen3.5-9B-AWQ`
+- Context window: `32768`
+- GPU memory utilization: `0.90`
+- Attention backend: `TRITON_ATTN`
+- Reasoning parser: `qwen3`
+- Default chat template kwargs: `{"enable_thinking": false}`
 
-- macOS
-  - Apple Silicon/arm64: `codex-aarch64-apple-darwin.tar.gz`
-  - x86_64 (older Mac hardware): `codex-x86_64-apple-darwin.tar.gz`
-- Linux
-  - x86_64: `codex-x86_64-unknown-linux-musl.tar.gz`
-  - arm64: `codex-aarch64-unknown-linux-musl.tar.gz`
+Start the model with:
 
-Each archive contains a single entry with the platform baked into the name (e.g., `codex-x86_64-unknown-linux-musl`), so you likely want to rename it to `codex` after extracting it.
+```sh
+docker compose -f modelo/docker-compose.qwen35-9b-awq.yml up -d
+```
 
-</details>
+The compose template keeps tool calling configurable through `VLLM_TOOL_CALL_PARSER`. The current default is `qwen3_coder`; `qwen3_xml` is another Qwen parser to test when changing model families or vLLM versions.
 
-### Using Codex with your ChatGPT plan
+## Configuration
 
-Run `codex` and select **Sign in with ChatGPT**. We recommend signing into your ChatGPT account to use Codex as part of your Plus, Pro, Business, Edu, or Enterprise plan. [Learn more about what's included in your ChatGPT plan](https://help.openai.com/en/articles/11369540-codex-in-chatgpt).
+Qwen Codex reads a local `.env` file in the current directory and the process environment. Precedence is CLI flags, official `QWEN_CODEX_*` environment variables, supported short aliases, then documented defaults.
 
-You can also use Codex with an API key, but this requires [additional setup](https://developers.openai.com/codex/auth#sign-in-with-an-api-key).
+Core variables:
 
-## Docs
+```sh
+QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1
+QWEN_CODEX_API_KEY=local-dev-key
+QWEN_CODEX_MODEL=qwen35-local
+QWEN_CODEX_CONTEXT_WINDOW=32768
+QWEN_CODEX_REQUEST_TIMEOUT_MS=120000
+QWEN_CODEX_LOG_LEVEL=info
+```
 
-- [**Codex Documentation**](https://developers.openai.com/codex)
-- [**Contributing**](./docs/contributing.md)
-- [**Installing & building**](./docs/install.md)
-- [**Open source fund**](./docs/open-source-fund.md)
+Local vLLM accepts a placeholder API key unless you configure API-key enforcement on the server.
 
-This repository is licensed under the [Apache-2.0 License](LICENSE).
+## Normal Usage
+
+```sh
+qwen-codex --help
+qwen-codex --version
+qwen-codex --health
+qwen-codex "What is 2+2? Answer in one word."
+qwen-codex exec "Summarize this repository."
+```
+
+A bare prompt is routed to `codex exec --skip-git-repo-check` with Qwen provider overrides. This preserves the upstream Codex agent architecture.
+
+## YOLO Mode
+
+YOLO mode runs repeated normal Codex agent rounds and asks a separate OpenAI-compatible refiner model for the next prompt between rounds.
+
+```sh
+qwen-codex --yolo "Create a minimal README for this project."
+qwen-codex --yolo --iterations 10 "Refine this project."
+qwen-codex --yolo -n 3 "Improve tests and docs."
+```
+
+YOLO stops when the iteration limit is reached, the refiner returns `YOLO_STOP`, the repeated-prompt guard triggers, the failure guard triggers, or Ctrl+C is received. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as both JSON and Markdown, with secrets redacted.
+
+See [docs/yolo-mode.md](docs/yolo-mode.md).
+
+## YOLO Configuration
+
+```sh
+QWEN_CODEX_YOLO_REFINER_BASE_URL=http://127.0.0.1:8002/v1
+QWEN_CODEX_YOLO_REFINER_API_KEY=local-dev-key
+QWEN_CODEX_YOLO_REFINER_MODEL=qwen35-local
+QWEN_CODEX_YOLO_LOG_DIR=.qwen-codex/yolo-runs
+QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
+QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
+QWEN_CODEX_YOLO_MAX_FAILURES=3
+```
+
+Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless `--iterations` or `-n` is provided.
+
+## Safety Notes
+
+Qwen Codex can run shell commands and edit files through upstream Codex tools. Review generated changes, keep secrets out of prompts when possible, and use temporary workspaces for destructive experiments. YOLO logs redact common API keys, tokens, authorization headers, `.env` assignments, credentials, and private keys before writing to disk.
+
+## Build And Test
+
+```sh
+cd codex-rs
+just fmt
+cargo test -p codex-qwen
+cargo build -p codex-cli
+just fix -p codex-qwen
+```
+
+If dependencies change, update and check Bazel locks from the repo root:
+
+```sh
+just bazel-lock-update
+just bazel-lock-check
+```
+
+Root formatting uses:
+
+```sh
+pnpm run format
+```
+
+## Documentation
+
+- [Modelo compose files](modelo/README.md)
+- [YOLO mode](docs/yolo-mode.md)
+- [Verification](docs/verification.md)
+- [Research notes](docs/research-notes.md)
+- [Upstream sync](docs/upstream-sync.md)
+- [Roadmap](docs/roadmap.md)
+- [Contributing](CONTRIBUTING.md)
+
+Community model compose files belong under `modelo/` as `docker-compose.<model>.yml` with model, parser, GPU, and context-window notes.

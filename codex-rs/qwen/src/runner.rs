@@ -15,7 +15,7 @@ use crate::config::DEFAULT_API_KEY;
 use crate::config::EnvSource;
 use crate::config::ResolvedQwenConfig;
 use crate::health::run_health_check;
-use crate::yolo::run_yolo_placeholder;
+use crate::yolo::run_yolo_mode;
 
 pub async fn run_qwen_entrypoint(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
     let parsed = parse_qwen_args(env::args().skip(1).collect())?;
@@ -33,7 +33,7 @@ pub async fn run_qwen_entrypoint(arg0_paths: Arg0DispatchPaths) -> anyhow::Resul
         }
         QwenCommand::Health => run_health_check(&config).await,
         QwenCommand::Normal { codex_args } => run_codex(arg0_paths, config, codex_args).await,
-        QwenCommand::Yolo { prompt_parts } => run_yolo_placeholder(config, prompt_parts).await,
+        QwenCommand::Yolo { prompt_parts } => run_yolo_mode(arg0_paths, config, prompt_parts).await,
     }
 }
 
@@ -66,7 +66,7 @@ async fn run_codex(
     }
 }
 
-fn resolve_codex_executable(arg0_paths: &Arg0DispatchPaths) -> anyhow::Result<PathBuf> {
+pub(crate) fn resolve_codex_executable(arg0_paths: &Arg0DispatchPaths) -> anyhow::Result<PathBuf> {
     let current = arg0_paths
         .codex_self_exe
         .clone()

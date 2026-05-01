@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-01T19:14:48Z
+Last updated: 2026-05-01T20:10:00Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -92,7 +92,40 @@ Checks run:
 - `docker compose -f modelo/docker-compose.qwen35-9b-awq.yml config`: passed and shows host port `8002`, container port `8000`, `TRITON_ATTN`, `qwen3`, `qwen3_coder`, and `{"enable_thinking": false}`.
 - `qwen-codex "What is 2+2? Answer in one word."`: passed against `http://127.0.0.1:8002/v1`; visible assistant text was `4`.
 
+## YOLO Mode Milestone Status
+
+YOLO mode has been implemented as a Qwen wrapper feature that delegates each agent round to the normal upstream `codex exec` path and resumes the same Codex thread between refiner prompts.
+
+Checks run for this milestone:
+
+- `cd codex-rs && just fmt`: passed.
+- `cd codex-rs && cargo test -p codex-qwen`: passed, 24 tests.
+- `cd codex-rs && just fix -p codex-qwen`: passed.
+- `cd codex-rs && cargo build -p codex-cli`: passed.
+- `cd codex-rs && ./target/debug/qwen-codex --help`: passed.
+- `cd codex-rs && ./target/debug/qwen-codex --version`: passed.
+- `cd codex-rs && ./target/debug/qwencodex --help`: passed.
+- `cd codex-rs && ./target/debug/qwen-codex --yolo --iterations 0 --yolo-log-dir <tmpdir> "Smoke prompt"`: passed and wrote `run.json` plus `run.md` without entering the agent/refiner loop.
+- `PATH="$HOME/.local/bin:$PATH" just bazel-lock-update`: passed.
+- `PATH="$HOME/.local/bin:$PATH" just bazel-lock-check`: passed.
+- `PATH="$HOME/.local/bin:$PATH" pnpm run format`: passed with the existing Node engine warning because this machine has Node `v20.20.0` while the repo asks for Node `>=22`.
+- `git diff --check`: passed.
+
+YOLO behavior covered by tests:
+
+- CLI parsing for `--yolo`, `--iterations`, `-n`, and the optional `--10` shorthand.
+- Fixed iteration limits.
+- Infinite-mode setup without looping forever by stopping on `YOLO_STOP`.
+- `YOLO_STOP` refiner stop signal.
+- Repeated prompt guard.
+- Consecutive failure guard.
+- Ctrl+C interrupt flag behavior between rounds.
+- YOLO log writing and secret redaction.
+- Refiner client call against a mocked OpenAI-compatible `/v1/chat/completions` endpoint.
+- YOLO refiner env/config loading.
+
 Not run in this milestone:
 
 - Full Rust workspace test suite. This milestone used scoped tests for the changed crates and focused Qwen compatibility tests.
-- YOLO behavioral checks. YOLO mode is intentionally deferred until the YOLO loop controller and logging modules are implemented.
+- End-to-end YOLO run against the local vLLM server. The unit tests mock the refiner and agent paths; a live multi-iteration run should be done next in a temporary workspace.
+- Behavioral web/PDF/DOCX/XLSX tool tests. Those remain open validation tasks for the broader project.

@@ -1,6 +1,6 @@
 # Research Notes
 
-Last updated: 2026-05-01T19:14:48Z
+Last updated: 2026-05-01T20:10:00Z
 
 ## Repository Structure
 
@@ -61,9 +61,9 @@ This keeps upstream provider and agent code mostly unchanged and makes future up
 
 ## YOLO Hook Point
 
-YOLO mode should be implemented outside `codex-core` and drive normal agent turns through `codex exec`.
+YOLO mode is implemented outside `codex-core` and drives normal agent turns through `codex exec`.
 
-The first iteration starts a Qwen Codex exec thread. Later iterations resume the latest matching Qwen thread so context, compaction, tools, skills, and MCP behavior stay owned by upstream Codex.
+The first iteration starts a Qwen Codex exec thread. Later iterations resume the same thread id so context, compaction, tools, skills, and MCP behavior stay owned by upstream Codex.
 
 ## Local Model Health Check
 
@@ -98,6 +98,15 @@ The healthy local server uses host base URL `http://127.0.0.1:8002/v1`, served m
 - vLLM `/v1/models` returns the OpenAI-compatible `{"object":"list","data":[...]}` shape, while Codex's model metadata manager expects the Codex model catalog shape. Custom providers with `requires_openai_auth = false` should not inherit the user's OpenAI auth manager; this avoids trying to refresh Codex backend model metadata for local vLLM while preserving first-party OpenAI behavior.
 - The verified Qwen/vLLM Responses API still produced reasoning-only streams in this environment despite the server-side `enable_thinking=false` fix. Qwen Codex therefore adds a provider-name-scoped compatibility shim that moves `developer` messages into `instructions` and synthesizes final assistant text from Qwen reasoning-only output when needed.
 - Direct Chat Completions against the same server returned `4` for the arithmetic smoke prompt. The final Qwen Codex normal-mode smoke also returned visible assistant text `4` through `qwen-codex`.
+
+## YOLO Implementation Findings
+
+- YOLO mode lives under `codex-rs/qwen/src/yolo/` instead of `codex-core`, matching the goal of keeping the fork integration modular.
+- The agent runner invokes the upstream Codex binary as `codex exec --json --skip-git-repo-check` and uses `codex exec --json --skip-git-repo-check resume <thread-id> <prompt>` for later rounds.
+- Structured summaries are built from Codex JSONL events when exposed, plus git status and diff summaries from the current workspace.
+- Refiner calls use an OpenAI-compatible Chat Completions endpoint at `<refiner-base-url>/chat/completions`.
+- Logs are written as JSON and Markdown under `.qwen-codex/yolo-runs/<run-id>/` after passing through the Qwen redaction helper.
+- Loop guards stop on fixed iteration count, `YOLO_STOP`, repeated refiner prompts, repeated failures, and Ctrl+C between rounds.
 
 ## External Source Notes
 
