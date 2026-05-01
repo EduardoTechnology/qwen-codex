@@ -53,3 +53,12 @@
 - Result: final scoped checks passed. `pnpm run format` passes but emits the documented Node v20 engine warning. Web search is capability-missing, PDF and DOCX passed, XLSX failed because package-based spreadsheet generation could not create `test.xlsx`. Auto-compact config propagation is confirmed at `32768 -> 26214`, but long-run compaction stress testing remains open.
 - Commit hash: `696f1765be1926a02a266dddffd2a886647e72c2`.
 - Next step: open a PR from `feature/qwen-codex-local-yolo` to `main` and decide whether to add first-class document/spreadsheet helper skills before release.
+
+## 2026-05-01T21:39:20Z
+
+- Objective: preserve upstream approval-bypass behavior while keeping YOLO refiner mode explicit.
+- Files changed summary: added `--yolo-refiner` and `--yolorefiner` aliases, kept `--yolo` as backward-compatible refiner alias, forwarded `--dangerously-bypass-approvals-and-sandbox` to YOLO agent rounds only when explicitly passed, omitted workspace-write sandbox in that explicit bypass path, and documented the flag semantics.
+- Tests run: `cd codex-rs && just fmt`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; `qwen-codex --help`; `qwencodex --help`; `qwen-codex --version`; `qwen-codex --yolo-refiner --iterations 0 --dangerously-bypass-approvals-and-sandbox`.
+- Result: Qwen tests passed and native help shows `--yolo-refiner` as the preferred flag. Explicit bypass reaches upstream Codex as `approval: never` and `sandbox: danger-full-access`; the tiny live arithmetic smoke with the current local model returned the known Qwen reasoning-only warning, so the model-output part is not counted as a bypass verification.
+- Commit hash: pending.
+- Next step: run the requested five-round ecommerce YOLO UX test and document round quality.

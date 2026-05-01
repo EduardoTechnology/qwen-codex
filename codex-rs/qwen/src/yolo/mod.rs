@@ -48,10 +48,15 @@ pub async fn run_yolo_mode(
     arg0_paths: Arg0DispatchPaths,
     config: ResolvedQwenConfig,
     prompt_parts: Vec<String>,
+    dangerously_bypass_approvals_and_sandbox: bool,
 ) -> anyhow::Result<()> {
     let prompt = initial_prompt(prompt_parts).await?;
     let codex_exe = resolve_codex_executable(&arg0_paths)?;
-    let agent = CodexAgentRunner::new(codex_exe, config.clone());
+    let agent = CodexAgentRunner::new(
+        codex_exe,
+        config.clone(),
+        dangerously_bypass_approvals_and_sandbox,
+    );
     let refiner = RefinerClient::new(&config)?;
     let interrupt_flag = Arc::new(AtomicBool::new(false));
     let interrupt_flag_for_signal = interrupt_flag.clone();

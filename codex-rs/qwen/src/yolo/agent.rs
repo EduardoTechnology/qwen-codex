@@ -13,37 +13,36 @@ use crate::yolo::types::AgentRoundRequest;
 use crate::yolo::types::AgentRoundResult;
 
 const OUTPUT_TAIL_LIMIT: usize = 8_000;
+const DANGEROUS_BYPASS_FLAG: &str = "--dangerously-bypass-approvals-and-sandbox";
 
 pub(crate) struct CodexAgentRunner {
     codex_exe: PathBuf,
     config: ResolvedQwenConfig,
+    dangerously_bypass_approvals_and_sandbox: bool,
 }
 
 impl CodexAgentRunner {
-    pub(crate) fn new(codex_exe: PathBuf, config: ResolvedQwenConfig) -> Self {
-        Self { codex_exe, config }
+    pub(crate) fn new(
+        codex_exe: PathBuf,
+        config: ResolvedQwenConfig,
+        dangerously_bypass_approvals_and_sandbox: bool,
+    ) -> Self {
+        Self {
+            codex_exe,
+            config,
+            dangerously_bypass_approvals_and_sandbox,
+        }
     }
 
     pub(crate) async fn run_round(
         &self,
         request: AgentRoundRequest,
     ) -> anyhow::Result<AgentRoundResult> {
-        let mut args = self.config.codex_config_args();
-        args.extend([
-            "exec".to_string(),
-            "--json".to_string(),
-            "--skip-git-repo-check".to_string(),
-            "--sandbox".to_string(),
-            "workspace-write".to_string(),
-        ]);
-        match request.thread_id {
-            Some(thread_id) => {
-                args.extend(["resume".to_string(), thread_id, request.prompt]);
-            }
-            None => {
-                args.push(request.prompt);
-            }
-        }
+        let args = build_codex_exec_args(
+            self.config.codex_config_args(),
+            request,
+            self.dangerously_bypass_approvals_and_sandbox,
+        );
 
         let output = Command::new(&self.codex_exe)
             .args(args)
@@ -67,6 +66,32 @@ impl CodexAgentRunner {
             &String::from_utf8_lossy(&output.stderr),
         ))
     }
+}
+
+pub(crate) fn build_codex_exec_args(
+    mut args: Vec<String>,
+    request: AgentRoundRequest,
+    dangerously_bypass_approvals_and_sandbox: bool,
+) -> Vec<String> {
+    args.extend([
+        "exec".to_string(),
+        "--json".to_string(),
+        "--skip-git-repo-check".to_string(),
+    ]);
+    if dangerously_bypass_approvals_and_sandbox {
+        args.push(DANGEROUS_BYPASS_FLAG.to_string());
+    } else {
+        args.extend(["--sandbox".to_string(), "workspace-write".to_string()]);
+    }
+    match request.thread_id {
+        Some(thread_id) => {
+            args.extend(["resume".to_string(), thread_id, request.prompt]);
+        }
+        None => {
+            args.push(request.prompt);
+        }
+    }
+    args
 }
 
 pub(crate) fn parse_agent_output(
@@ -320,6 +345,59 @@ mod tests {
                 stdout_tail: stdout,
                 stderr_tail: String::new(),
             }
+        );
+    }
+
+    #[test]
+    fn codex_exec_args_default_to_workspace_write_sandbox() {
+        let args = build_codex_exec_args(
+            vec!["-c".to_string(), "model=\"qwen35-local\"".to_string()],
+            AgentRoundRequest {
+                iteration: 1,
+                prompt: "Create files".to_string(),
+                thread_id: None,
+            },
+            false,
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "-c",
+                "model=\"qwen35-local\"",
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "workspace-write",
+                "Create files",
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_exec_args_forward_explicit_dangerous_bypass() {
+        let args = build_codex_exec_args(
+            Vec::new(),
+            AgentRoundRequest {
+                iteration: 2,
+                prompt: "Continue".to_string(),
+                thread_id: Some("thread-1".to_string()),
+            },
+            true,
+        );
+
+        assert_eq!(
+            args,
+            vec![
+                "exec",
+                "--json",
+                "--skip-git-repo-check",
+                DANGEROUS_BYPASS_FLAG,
+                "resume",
+                "thread-1",
+                "Continue",
+            ]
         );
     }
 }

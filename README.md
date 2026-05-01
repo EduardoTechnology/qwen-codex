@@ -87,12 +87,20 @@ A bare prompt is routed to `codex exec --skip-git-repo-check` with Qwen provider
 YOLO mode runs repeated normal Codex agent rounds and asks a separate OpenAI-compatible refiner model for the next prompt between rounds.
 
 ```sh
-qwen-codex --yolo "Create a minimal README for this project."
-qwen-codex --yolo --iterations 10 "Refine this project."
-qwen-codex --yolo -n 3 "Improve tests and docs."
+qwen-codex --yolo-refiner "Create a minimal README for this project."
+qwen-codex --yolo-refiner --iterations 10 "Refine this project."
+qwen-codex --yolo-refiner -n 3 "Improve tests and docs."
 ```
 
+`--yolo-refiner` is the preferred explicit flag. `--yolo` remains supported for compatibility, but upstream Codex also uses `--yolo` as an alias for `--dangerously-bypass-approvals-and-sandbox`.
+
 YOLO stops when the iteration limit is reached, the refiner returns `YOLO_STOP`, the repeated-prompt guard triggers, the failure guard triggers, or Ctrl+C is received. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as both JSON and Markdown, with secrets redacted.
+
+For unattended local experiments, approvals and sandboxing are bypassed only when explicitly requested:
+
+```sh
+qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Refine this project."
+```
 
 See [docs/yolo-mode.md](docs/yolo-mode.md).
 

@@ -33,7 +33,18 @@ pub async fn run_qwen_entrypoint(arg0_paths: Arg0DispatchPaths) -> anyhow::Resul
         }
         QwenCommand::Health => run_health_check(&config).await,
         QwenCommand::Normal { codex_args } => run_codex(arg0_paths, config, codex_args).await,
-        QwenCommand::Yolo { prompt_parts } => run_yolo_mode(arg0_paths, config, prompt_parts).await,
+        QwenCommand::Yolo {
+            prompt_parts,
+            dangerously_bypass_approvals_and_sandbox,
+        } => {
+            run_yolo_mode(
+                arg0_paths,
+                config,
+                prompt_parts,
+                dangerously_bypass_approvals_and_sandbox,
+            )
+            .await
+        }
     }
 }
 
@@ -152,7 +163,9 @@ OPTIONS:
     --version, -V                 Show qwen-codex version
 
 YOLO OPTIONS:
-    --yolo                        Start autonomous refinement mode
+    --yolo-refiner                Start autonomous refinement mode
+    --yolorefiner                 Compatibility alias for --yolo-refiner
+    --yolo                        Backward-compatible alias; upstream Codex also uses this as a dangerous bypass alias
     --iterations, -n <COUNT>      Run a fixed number of refinement iterations
     --refiner-base-url <URL>      OpenAI-compatible refiner endpoint
     --refiner-api-key <KEY>       Refiner API key
@@ -160,6 +173,8 @@ YOLO OPTIONS:
     --yolo-log-dir <DIR>          YOLO run log directory
     --max-repeated-prompts <N>    Repeated prompt guard
     --max-failures <N>            Repeated failure guard
+    --dangerously-bypass-approvals-and-sandbox
+                                  Forward upstream Codex dangerous bypass to each YOLO agent round
 
 ENVIRONMENT:
     QWEN_CODEX_BASE_URL           default: {base_url}
@@ -176,7 +191,8 @@ EXAMPLES:
     qwen-codex --health
     qwen-codex "What is 2+2? Answer in one word."
     qwen-codex --model qwen35-local exec "Summarize this repository."
-    qwen-codex --yolo --iterations 10 "Refine this project."
+    qwen-codex --yolo-refiner --iterations 10 "Refine this project."
+    qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Autonomously refine this project."
 "#,
         version = env!("CARGO_PKG_VERSION"),
         base_url = config.base_url,

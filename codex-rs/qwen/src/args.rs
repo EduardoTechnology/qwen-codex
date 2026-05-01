@@ -26,8 +26,13 @@ pub enum QwenCommand {
     Help,
     Version,
     Health,
-    Normal { codex_args: Vec<String> },
-    Yolo { prompt_parts: Vec<String> },
+    Normal {
+        codex_args: Vec<String>,
+    },
+    Yolo {
+        prompt_parts: Vec<String>,
+        dangerously_bypass_approvals_and_sandbox: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +68,7 @@ const CODEX_SUBCOMMANDS: &[&str] = &[
     "exec-server",
     "features",
 ];
+const DANGEROUS_BYPASS_FLAG: &str = "--dangerously-bypass-approvals-and-sandbox";
 
 pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
     if matches!(args.first().map(String::as_str), Some("--help" | "-h")) {
@@ -82,6 +88,7 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
     let mut passthrough = Vec::new();
     let mut yolo = false;
     let mut health = false;
+    let mut dangerously_bypass_approvals_and_sandbox = false;
     let mut index = 0;
     while index < args.len() {
         let arg = &args[index];
@@ -89,9 +96,16 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             passthrough.extend(args[index + 1..].iter().cloned());
             break;
         }
-        if arg == "--yolo" {
+        if matches!(arg.as_str(), "--yolo" | "--yolo-refiner" | "--yolorefiner") {
             yolo = true;
             index += 1;
+            continue;
+        }
+        if consume_dangerous_bypass_flag(
+            &mut index,
+            arg,
+            &mut dangerously_bypass_approvals_and_sandbox,
+        )? {
             continue;
         }
         if arg == "--health" {
@@ -230,24 +244,61 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
     } else if yolo {
         QwenCommand::Yolo {
             prompt_parts: passthrough,
+            dangerously_bypass_approvals_and_sandbox,
         }
     } else {
         QwenCommand::Normal {
-            codex_args: normalize_normal_args(passthrough),
+            codex_args: normalize_normal_args(
+                passthrough,
+                dangerously_bypass_approvals_and_sandbox,
+            ),
         }
     };
 
     Ok(ParsedQwenArgs { overrides, command })
 }
 
-fn normalize_normal_args(args: Vec<String>) -> Vec<String> {
-    if args.is_empty() || starts_with_codex_subcommand(&args) {
-        return args;
+fn normalize_normal_args(
+    args: Vec<String>,
+    dangerously_bypass_approvals_and_sandbox: bool,
+) -> Vec<String> {
+    if args.is_empty() {
+        return if dangerously_bypass_approvals_and_sandbox {
+            vec![DANGEROUS_BYPASS_FLAG.to_string()]
+        } else {
+            args
+        };
+    }
+
+    if starts_with_codex_subcommand(&args) {
+        return add_dangerous_bypass_to_subcommand(args, dangerously_bypass_approvals_and_sandbox);
     }
 
     let mut normalized = vec!["exec".to_string(), "--skip-git-repo-check".to_string()];
-    normalized.extend(["--sandbox".to_string(), "workspace-write".to_string()]);
+    if dangerously_bypass_approvals_and_sandbox {
+        normalized.push(DANGEROUS_BYPASS_FLAG.to_string());
+    } else {
+        normalized.extend(["--sandbox".to_string(), "workspace-write".to_string()]);
+    }
     normalized.extend(args);
+    normalized
+}
+
+fn add_dangerous_bypass_to_subcommand(
+    args: Vec<String>,
+    dangerously_bypass_approvals_and_sandbox: bool,
+) -> Vec<String> {
+    if !dangerously_bypass_approvals_and_sandbox {
+        return args;
+    }
+
+    let mut normalized = Vec::with_capacity(args.len() + 1);
+    let mut iter = args.into_iter();
+    if let Some(subcommand) = iter.next() {
+        normalized.push(subcommand);
+        normalized.push(DANGEROUS_BYPASS_FLAG.to_string());
+        normalized.extend(iter);
+    }
     normalized
 }
 
@@ -347,6 +398,25 @@ fn consume_bool_flag(
     Ok(true)
 }
 
+fn consume_dangerous_bypass_flag(
+    index: &mut usize,
+    arg: &str,
+    target: &mut bool,
+) -> anyhow::Result<bool> {
+    if arg == DANGEROUS_BYPASS_FLAG {
+        *target = true;
+        *index += 1;
+        return Ok(true);
+    }
+
+    let Some(value) = arg.strip_prefix(&format!("{DANGEROUS_BYPASS_FLAG}=")) else {
+        return Ok(false);
+    };
+    *target = parse_bool(DANGEROUS_BYPASS_FLAG, value)?;
+    *index += 1;
+    Ok(true)
+}
+
 fn next_value(args: &[String], index: usize, name: &str) -> anyhow::Result<String> {
     args.get(index + 1)
         .cloned()
@@ -423,7 +493,8 @@ mod tests {
         assert_eq!(
             parsed.command,
             QwenCommand::Yolo {
-                prompt_parts: vec!["Improve docs".to_string()]
+                prompt_parts: vec!["Improve docs".to_string()],
+                dangerously_bypass_approvals_and_sandbox: false,
             }
         );
     }
@@ -433,5 +504,58 @@ mod tests {
         let parsed = parse_qwen_args(vec!["--yolo".to_string(), "--10".to_string()]).unwrap();
 
         assert_eq!(parsed.overrides.iterations, Some(10));
+    }
+
+    #[test]
+    fn parses_yolo_refiner_alias_and_dangerous_bypass() {
+        let parsed = parse_qwen_args(vec![
+            "--yolo-refiner".to_string(),
+            DANGEROUS_BYPASS_FLAG.to_string(),
+            "Improve docs".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            parsed.command,
+            QwenCommand::Yolo {
+                prompt_parts: vec!["Improve docs".to_string()],
+                dangerously_bypass_approvals_and_sandbox: true,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_yolorefiner_compat_alias() {
+        let parsed =
+            parse_qwen_args(vec!["--yolorefiner".to_string(), "Improve".to_string()]).unwrap();
+
+        assert_eq!(
+            parsed.command,
+            QwenCommand::Yolo {
+                prompt_parts: vec!["Improve".to_string()],
+                dangerously_bypass_approvals_and_sandbox: false,
+            }
+        );
+    }
+
+    #[test]
+    fn normal_prompt_forwards_explicit_dangerous_bypass_without_workspace_sandbox() {
+        let parsed = parse_qwen_args(vec![
+            DANGEROUS_BYPASS_FLAG.to_string(),
+            "What is 2+2?".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(
+            parsed.command,
+            QwenCommand::Normal {
+                codex_args: vec![
+                    "exec".to_string(),
+                    "--skip-git-repo-check".to_string(),
+                    DANGEROUS_BYPASS_FLAG.to_string(),
+                    "What is 2+2?".to_string(),
+                ]
+            }
+        );
     }
 }

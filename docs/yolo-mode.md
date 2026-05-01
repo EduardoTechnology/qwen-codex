@@ -5,18 +5,28 @@ YOLO mode is an autonomous refinement loop for Qwen Codex. It does not implement
 ## Commands
 
 ```sh
-qwen-codex --yolo "Create a minimal README for this project."
-qwen-codex --yolo --iterations 10 "Refine this project."
-qwen-codex --yolo -n 10 "Refine this project."
+qwen-codex --yolo-refiner "Create a minimal README for this project."
+qwen-codex --yolo-refiner --iterations 10 "Refine this project."
+qwen-codex --yolo-refiner -n 10 "Refine this project."
 ```
+
+`--yolo-refiner` is the preferred explicit flag. `--yolorefiner` is accepted as a compatibility alias. `--yolo` is also accepted for backward compatibility with early Qwen Codex builds, but upstream Codex uses `--yolo` as an alias for `--dangerously-bypass-approvals-and-sandbox`, so new scripts should prefer `--yolo-refiner`.
 
 The optional numeric shorthand is supported when it is unambiguous:
 
 ```sh
-qwen-codex --yolo --10 "Refine this project."
+qwen-codex --yolo-refiner --10 "Refine this project."
 ```
 
 Prefer `--iterations 10` or `-n 10` in scripts and documentation.
+
+Autonomous runs can use upstream Codex's dangerous approval/sandbox bypass only when explicitly requested:
+
+```sh
+qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Refine this project."
+```
+
+Without that flag, YOLO agent rounds run through upstream Codex with the workspace-write sandbox. Qwen Codex does not silently bypass approvals in normal or YOLO mode.
 
 ## Configuration
 
