@@ -33,5 +33,5 @@
 - Files changed summary: bounded YOLO refiner summaries, reduced refiner output budget, added sanitized refiner failure diagnostics to iteration logs, added camelCase run/iteration log fields required by verification scripts, configured Qwen auto-compact threshold from the configured context window, and made YOLO agent rounds use workspace-write sandbox while excluding `.qwen-codex/` logs from changed-file summaries.
 - Tests run: `just fmt`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; live two-iteration YOLO smoke test in `/tmp/yolo-smoke`.
 - Result: the refiner now calls `/chat/completions` successfully with bounded payloads. The live YOLO run completed exactly two iterations, logged non-empty `refinerResponse` and `nextPrompt`, injected round 1 `nextPrompt` into round 2, and passed secret redaction. The main Qwen/vLLM Responses history after tool calls still needs a separate provider-compatibility fix.
-- Commit hash: `PENDING`.
+- Commit hash: `d829e895824c106efd5a86f93fc805c1158654c9`.
 - Next step: diagnose and fix the Qwen-only Responses compatibility failure after tool calls and resume.
