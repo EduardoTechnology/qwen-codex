@@ -24,5 +24,5 @@
 - Files changed summary: added YOLO loop modules for agent-round delegation, refiner chat-completions client, run/iteration logging, redaction, loop guards, Ctrl+C interrupt handling, CLI/env parser coverage, README YOLO docs, and `docs/yolo-mode.md`.
 - Tests run: `just fmt`; `cargo test -p codex-qwen`; `just fix -p codex-qwen`; `cargo build -p codex-cli`; CLI smoke tests for `qwen-codex --help`, `qwen-codex --version`, `qwencodex --help`, and `qwen-codex --yolo --iterations 0`; `just bazel-lock-update`; `just bazel-lock-check`; `pnpm run format`; `git diff --check`.
 - Result: YOLO unit coverage passes and the native CLI builds. Live end-to-end YOLO against the local vLLM server is still pending.
-- Commit hash: pending.
-- Next step: update dependency locks and formatting, then commit and push the YOLO milestone.
+- Commit hash: `2e9648aa5699c7fad420ffc7530a77ce883644d4`.
+- Next step: push the YOLO milestone branch and run live YOLO behavioral checks in a temporary workspace.
