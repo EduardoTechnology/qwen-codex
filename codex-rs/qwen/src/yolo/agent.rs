@@ -33,6 +33,8 @@ impl CodexAgentRunner {
             "exec".to_string(),
             "--json".to_string(),
             "--skip-git-repo-check".to_string(),
+            "--sandbox".to_string(),
+            "workspace-write".to_string(),
         ]);
         match request.thread_id {
             Some(thread_id) => {
@@ -113,14 +115,15 @@ pub(crate) fn parse_agent_output(
         }
     }
 
+    let failed_exit = exit_code.is_some_and(|code| code != 0);
     if let Some(code) = exit_code
-        && code != 0
+        && failed_exit
     {
         result
             .errors
             .push(format!("agent process exited with code {code}"));
     }
-    if !stderr.trim().is_empty() {
+    if failed_exit && !stderr.trim().is_empty() {
         result.errors.push(tail(stderr, OUTPUT_TAIL_LIMIT));
     }
 
@@ -227,6 +230,7 @@ pub(crate) fn changed_files_from_git_status(status: &str) -> Vec<String> {
     let mut files = status
         .lines()
         .filter_map(|line| line.split_whitespace().last())
+        .filter(|path| !path.starts_with(".qwen-codex/"))
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     files.sort();

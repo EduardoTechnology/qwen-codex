@@ -221,6 +221,10 @@ impl ResolvedQwenConfig {
             format!("model_provider={}", toml_string_literal(QWEN_PROVIDER_ID)),
             format!("model={}", toml_string_literal(&self.model)),
             format!("model_context_window={}", self.context_window),
+            format!(
+                "model_auto_compact_token_limit={}",
+                qwen_auto_compact_threshold(self.context_window)
+            ),
             self.provider_override(),
         ];
         if self.web_search_live {
@@ -245,6 +249,12 @@ impl ResolvedQwenConfig {
             self.request_timeout_ms
         )
     }
+}
+
+pub fn qwen_auto_compact_threshold(context_window: u64) -> u64 {
+    let eighty_percent = ((context_window as f64) * 0.80).floor() as u64;
+    let reserve_4096 = context_window.saturating_sub(4_096);
+    eighty_percent.min(reserve_4096)
 }
 
 fn resolve_string(
@@ -431,6 +441,25 @@ mod tests {
     }
 
     #[test]
+    fn qwen_auto_compact_threshold_uses_safe_context_window_reserve() {
+        assert_eq!(qwen_auto_compact_threshold(32_768), 26_214);
+        assert_eq!(qwen_auto_compact_threshold(8_192), 4_096);
+        assert_eq!(qwen_auto_compact_threshold(4_096), 0);
+    }
+
+    #[test]
+    fn codex_overrides_include_context_window_and_compact_threshold() {
+        let env = HashMap::from([("QWEN_CODEX_CONTEXT_WINDOW".to_string(), "32768".to_string())]);
+
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+        let overrides = config.codex_overrides().join("\n");
+
+        assert!(overrides.contains("model_context_window=32768"));
+        assert!(overrides.contains("model_auto_compact_token_limit=26214"));
+    }
+
+    #[test]
     fn resolves_yolo_refiner_and_guard_config() {
         let env = HashMap::from([
             (
@@ -475,5 +504,24 @@ mod tests {
                 max_failures: 2,
             }
         );
+    }
+
+    #[test]
+    fn yolo_refiner_config_falls_back_to_normal_qwen_config() {
+        let env = HashMap::from([
+            (
+                "QWEN_CODEX_BASE_URL".to_string(),
+                "http://normal/v1".to_string(),
+            ),
+            ("QWEN_CODEX_API_KEY".to_string(), "normal-key".to_string()),
+            ("QWEN_CODEX_MODEL".to_string(), "normal-model".to_string()),
+        ]);
+
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+
+        assert_eq!(config.yolo.refiner_base_url, "http://normal/v1");
+        assert_eq!(config.yolo.refiner_api_key, "normal-key");
+        assert_eq!(config.yolo.refiner_model, "normal-model");
     }
 }

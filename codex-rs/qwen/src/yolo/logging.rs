@@ -167,6 +167,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let logger = YoloLogger::new(temp.path(), "run").await.unwrap();
         let iteration = YoloIterationLog {
+            run_id: "run".to_string(),
             session_id: Some("session".to_string()),
             iteration: 1,
             timestamp: now_timestamp(),
@@ -182,6 +183,7 @@ mod tests {
             current_git_status: String::new(),
             refiner_input_summary: None,
             refiner_raw_response: None,
+            refiner_error: None,
             next_prompt_injected_into_agent: None,
             stop_reason: Some(YoloStopReason::RefinerStopSignal),
         };

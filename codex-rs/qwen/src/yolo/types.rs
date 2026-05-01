@@ -51,6 +51,19 @@ pub(crate) struct RefinerResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RefinerFailureDiagnostic {
+    pub endpoint: String,
+    pub http_status: Option<u16>,
+    pub response_body: Option<String>,
+    pub request_summary_chars: usize,
+    pub request_summary_preview: String,
+    pub message_roles: Vec<String>,
+    pub max_tokens: u32,
+    pub temperature: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum YoloStopReason {
     IterationLimitReached,
@@ -62,6 +75,7 @@ pub(crate) enum YoloStopReason {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct YoloRunOutcome {
     pub run_id: String,
     pub run_dir: PathBuf,
@@ -71,6 +85,7 @@ pub(crate) struct YoloRunOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct YoloRunLog {
     pub run_id: String,
     pub started_at: String,
@@ -87,22 +102,30 @@ pub(crate) struct YoloRunLog {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct YoloIterationLog {
+    pub run_id: String,
     pub session_id: Option<String>,
     pub iteration: u32,
     pub timestamp: String,
     pub original_user_prompt: String,
+    #[serde(rename = "agentInputPrompt")]
     pub current_agent_input_prompt: String,
     pub agent_output_summary: String,
     pub actions_taken: Vec<String>,
     pub tool_calls_summary: Vec<String>,
+    #[serde(rename = "filesChanged")]
     pub changed_files: Vec<String>,
     pub git_diff_summary: String,
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
     pub current_git_status: String,
+    #[serde(rename = "refinerRequestSummary")]
     pub refiner_input_summary: Option<String>,
+    #[serde(rename = "refinerResponse")]
     pub refiner_raw_response: Option<String>,
+    pub refiner_error: Option<RefinerFailureDiagnostic>,
+    #[serde(rename = "nextPrompt")]
     pub next_prompt_injected_into_agent: Option<String>,
     pub stop_reason: Option<YoloStopReason>,
 }

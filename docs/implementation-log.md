@@ -26,3 +26,12 @@
 - Result: YOLO unit coverage passes and the native CLI builds. Live end-to-end YOLO against the local vLLM server is still pending.
 - Commit hash: `2e9648aa5699c7fad420ffc7530a77ce883644d4`.
 - Next step: push the YOLO milestone branch and run live YOLO behavioral checks in a temporary workspace.
+
+## 2026-05-01T20:34:36Z
+
+- Objective: preserve the live YOLO refiner fix and Qwen compact-threshold safety before changing the main agent/provider compatibility path.
+- Files changed summary: bounded YOLO refiner summaries, reduced refiner output budget, added sanitized refiner failure diagnostics to iteration logs, added camelCase run/iteration log fields required by verification scripts, configured Qwen auto-compact threshold from the configured context window, and made YOLO agent rounds use workspace-write sandbox while excluding `.qwen-codex/` logs from changed-file summaries.
+- Tests run: `just fmt`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; live two-iteration YOLO smoke test in `/tmp/yolo-smoke`.
+- Result: the refiner now calls `/chat/completions` successfully with bounded payloads. The live YOLO run completed exactly two iterations, logged non-empty `refinerResponse` and `nextPrompt`, injected round 1 `nextPrompt` into round 2, and passed secret redaction. The main Qwen/vLLM Responses history after tool calls still needs a separate provider-compatibility fix.
+- Commit hash: `PENDING`.
+- Next step: diagnose and fix the Qwen-only Responses compatibility failure after tool calls and resume.

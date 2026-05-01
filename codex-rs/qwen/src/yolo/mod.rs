@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::future::Future;
 use std::io::Write;
 use std::sync::Arc;
@@ -23,6 +22,7 @@ use crate::yolo::logging::YoloLogger;
 use crate::yolo::logging::new_run_id;
 use crate::yolo::logging::now_timestamp;
 use crate::yolo::refiner::RefinerClient;
+use crate::yolo::refiner::RefinerClientError;
 use crate::yolo::refiner::YOLO_STOP;
 use crate::yolo::types::AgentRoundRequest;
 use crate::yolo::types::AgentRoundResult;
@@ -38,6 +38,11 @@ mod agent;
 mod logging;
 mod refiner;
 mod types;
+
+const REFINER_SUMMARY_MAX_CHARS: usize = 12_000;
+const REFINER_AGENT_SUMMARY_MAX_CHARS: usize = 2_500;
+const REFINER_LIST_ITEM_MAX_CHARS: usize = 700;
+const REFINER_ERRORS_TOTAL_MAX_CHARS: usize = 2_100;
 
 pub async fn run_yolo_mode(
     arg0_paths: Arg0DispatchPaths,
@@ -120,7 +125,8 @@ where
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
     let mut current_prompt = config.original_prompt.clone();
     let mut session_id = None;
-    let mut repeated_prompts = HashMap::<String, u32>::new();
+    let mut last_refiner_prompt = None::<String>;
+    let mut repeated_prompt_count = 0_u32;
     let mut consecutive_failures = 0_u32;
     let mut iterations_completed = 0_u32;
 
@@ -198,6 +204,7 @@ where
         agent_result.changed_files.dedup();
 
         let mut iteration_log = YoloIterationLog {
+            run_id: run_id.clone(),
             session_id: session_id.clone(),
             iteration,
             timestamp: now_timestamp(),
@@ -213,6 +220,7 @@ where
             current_git_status,
             refiner_input_summary: None,
             refiner_raw_response: None,
+            refiner_error: None,
             next_prompt_injected_into_agent: None,
             stop_reason: None,
         };
@@ -265,6 +273,9 @@ where
                 } else {
                     YoloStopReason::RefinerError
                 };
+                if let Some(refiner_error) = err.downcast_ref::<RefinerClientError>() {
+                    iteration_log.refiner_error = Some(refiner_error.diagnostic());
+                }
                 iteration_log.errors.push(format!("refiner failed: {err}"));
                 iteration_log.stop_reason = Some(reason.clone());
                 iterations_completed = iteration;
@@ -289,7 +300,7 @@ where
             break;
         }
 
-        if next_prompt.eq_ignore_ascii_case(YOLO_STOP) {
+        if is_yolo_stop_signal(&next_prompt) {
             iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -319,9 +330,13 @@ where
         }
 
         let normalized_prompt = normalize_prompt_for_guard(&next_prompt);
-        let count = repeated_prompts.entry(normalized_prompt).or_insert(0);
-        *count = count.saturating_add(1);
-        if *count >= config.max_repeated_prompts {
+        if last_refiner_prompt.as_deref() == Some(normalized_prompt.as_str()) {
+            repeated_prompt_count = repeated_prompt_count.saturating_add(1);
+        } else {
+            last_refiner_prompt = Some(normalized_prompt);
+            repeated_prompt_count = 1;
+        }
+        if repeated_prompt_count >= config.max_repeated_prompts {
             iteration_log.stop_reason = Some(YoloStopReason::RepeatedPromptGuard);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -407,16 +422,32 @@ Git diff summary:
 Produce the next concrete prompt for the coding agent, or output YOLO_STOP."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
-        summary = iteration.agent_output_summary,
-        actions = bullet_lines(&iteration.actions_taken),
-        tools = bullet_lines(&iteration.tool_calls_summary),
-        files = bullet_lines(&iteration.changed_files),
-        commands = bullet_lines(&iteration.commands_tests_run),
-        errors = bullet_lines(&iteration.errors),
-        status = tail(&iteration.current_git_status, 4_000),
-        diff = tail(&iteration.git_diff_summary, 6_000),
+        summary = tail(
+            &iteration.agent_output_summary,
+            REFINER_AGENT_SUMMARY_MAX_CHARS
+        ),
+        actions =
+            bullet_lines_limited(&iteration.actions_taken, REFINER_LIST_ITEM_MAX_CHARS, 1_200),
+        tools = bullet_lines_limited(
+            &iteration.tool_calls_summary,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            1_000
+        ),
+        files = bullet_lines_limited(&iteration.changed_files, 300, 1_000),
+        commands = bullet_lines_limited(
+            &iteration.commands_tests_run,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            1_200
+        ),
+        errors = bullet_lines_limited(
+            &iteration.errors,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            REFINER_ERRORS_TOTAL_MAX_CHARS
+        ),
+        status = tail(&iteration.current_git_status, 1_000),
+        diff = tail(&iteration.git_diff_summary, 1_500),
     );
-    redact_text(&summary)
+    redact_text(&limit_text(&summary, REFINER_SUMMARY_MAX_CHARS))
 }
 
 fn interrupted(config: &YoloLoopConfig) -> bool {
@@ -426,19 +457,52 @@ fn interrupted(config: &YoloLoopConfig) -> bool {
         .is_some_and(|flag| flag.load(Ordering::SeqCst))
 }
 
-fn bullet_lines(values: &[String]) -> String {
+fn bullet_lines_limited(
+    values: &[String],
+    max_chars_per_value: usize,
+    max_total_chars: usize,
+) -> String {
     if values.is_empty() {
         return "- none".to_string();
     }
-    values
+    let joined = values
         .iter()
-        .map(|value| format!("- {value}"))
+        .map(|value| format!("- {}", tail(value, max_chars_per_value)))
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    limit_text(&joined, max_total_chars)
+}
+
+fn limit_text(value: &str, max_chars: usize) -> String {
+    let total = value.chars().count();
+    if total <= max_chars {
+        return value.to_string();
+    }
+    let marker = "\n[truncated to fit YOLO refiner context]\n";
+    let marker_len = marker.chars().count();
+    if max_chars <= marker_len {
+        return tail(value, max_chars);
+    }
+    let remaining = max_chars - marker_len;
+    let head_len = remaining * 2 / 3;
+    let tail_len = remaining - head_len;
+    let head = value.chars().take(head_len).collect::<String>();
+    let tail = value
+        .chars()
+        .skip(total.saturating_sub(tail_len))
+        .collect::<String>();
+    format!("{head}{marker}{tail}")
 }
 
 fn normalize_prompt_for_guard(prompt: &str) -> String {
     prompt.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn is_yolo_stop_signal(prompt: &str) -> bool {
+    prompt
+        .trim_start()
+        .to_ascii_uppercase()
+        .starts_with(YOLO_STOP)
 }
 
 async fn initial_prompt(prompt_parts: Vec<String>) -> anyhow::Result<String> {
@@ -502,7 +566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fixed_iteration_limit_controls_agent_rounds() {
+    async fn yolo_loop_guard_iteration_limit_controls_agent_rounds() {
         let temp = TempDir::new().unwrap();
         let calls = Rc::new(RefCell::new(0_u32));
         let calls_for_agent = calls.clone();
@@ -532,7 +596,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn infinite_mode_can_stop_with_refiner_signal() {
+    async fn yolo_loop_guard_exact_stop_signal_stops_loop() {
         let temp = TempDir::new().unwrap();
 
         let outcome = run_yolo_loop(
@@ -553,7 +617,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn repeated_prompt_guard_stops_loop() {
+    async fn yolo_loop_guard_stop_signal_prefix_stops_loop() {
+        let temp = TempDir::new().unwrap();
+
+        let outcome = run_yolo_loop(
+            loop_config(&temp, None),
+            |_| async { Ok(agent_result("session-1")) },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "stop".to_string(),
+                    next_prompt: "YOLO_STOP no further work remains".to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 1);
+        assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_guard_repeated_prompt_stops_loop() {
         let temp = TempDir::new().unwrap();
         let mut config = loop_config(&temp, None);
         config.max_repeated_prompts = 2;
@@ -576,7 +661,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn failure_guard_stops_after_agent_failures() {
+    async fn yolo_loop_guard_failure_guard_stops_after_agent_failures() {
         let temp = TempDir::new().unwrap();
         let mut config = loop_config(&temp, None);
         config.max_failures = 1;
@@ -599,7 +684,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn interrupt_flag_stops_without_looping_forever() {
+    async fn yolo_loop_guard_interrupt_flag_stops_without_looping_forever() {
         let temp = TempDir::new().unwrap();
         let mut config = loop_config(&temp, None);
         config.interrupt_flag = Some(Arc::new(AtomicBool::new(true)));
@@ -633,6 +718,7 @@ mod tests {
     #[test]
     fn refiner_summary_redacts_secrets() {
         let iteration = YoloIterationLog {
+            run_id: "run".to_string(),
             session_id: Some("session".to_string()),
             iteration: 1,
             timestamp: now_timestamp(),
@@ -648,6 +734,7 @@ mod tests {
             current_git_status: String::new(),
             refiner_input_summary: None,
             refiner_raw_response: None,
+            refiner_error: None,
             next_prompt_injected_into_agent: None,
             stop_reason: None,
         };
@@ -657,5 +744,35 @@ mod tests {
         assert!(summary.contains("[REDACTED]"));
         assert!(!summary.contains("sk_test_123456789abcdef"));
         assert!(!summary.contains("secret-value"));
+    }
+
+    #[test]
+    fn refiner_summary_is_bounded_for_large_error_payloads() {
+        let iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "prompt".to_string(),
+            agent_output_summary: "x".repeat(100_000),
+            actions_taken: vec!["action".repeat(10_000)],
+            tool_calls_summary: Vec::new(),
+            changed_files: Vec::new(),
+            git_diff_summary: "diff".repeat(10_000),
+            commands_tests_run: Vec::new(),
+            errors: vec!["error".repeat(100_000)],
+            current_git_status: "status".repeat(10_000),
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            stop_reason: None,
+        };
+
+        let summary = build_refiner_summary(&iteration);
+
+        assert!(summary.chars().count() <= REFINER_SUMMARY_MAX_CHARS);
+        assert!(summary.contains("[truncated"));
     }
 }

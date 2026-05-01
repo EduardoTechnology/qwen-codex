@@ -7,10 +7,18 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::config::ResolvedQwenConfig;
+use crate::redaction::redact_text;
+use crate::yolo::agent::tail;
+use crate::yolo::types::RefinerFailureDiagnostic;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
 
 pub(crate) const YOLO_STOP: &str = "YOLO_STOP";
+
+const REFINER_MAX_TOKENS: u32 = 512;
+const REFINER_TEMPERATURE: f32 = 0.2;
+const REFINER_DIAGNOSTIC_BODY_LIMIT: usize = 4_000;
+const REFINER_DIAGNOSTIC_REQUEST_LIMIT: usize = 1_000;
 
 const DEFAULT_REFINER_SYSTEM_PROMPT: &str = r#"You are a senior product and engineering refinement strategist supervising an autonomous coding agent.
 
@@ -65,9 +73,10 @@ impl RefinerClient {
 
     pub(crate) async fn refine(&self, request: RefinerRequest) -> anyhow::Result<RefinerResponse> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
+        let diagnostic = self.failure_diagnostic(&url, &request.summary, None, None);
         let response = self
             .client
-            .post(url)
+            .post(&url)
             .header(CONTENT_TYPE, "application/json")
             .header(AUTHORIZATION, format!("Bearer {}", self.api_key))
             .json(&ChatCompletionRequest {
@@ -82,12 +91,17 @@ impl RefinerClient {
                         content: &request.summary,
                     },
                 ],
-                temperature: 0.2,
-                max_tokens: 1_024,
+                temperature: REFINER_TEMPERATURE,
+                max_tokens: REFINER_MAX_TOKENS,
             })
             .send()
             .await
-            .context("failed to call YOLO refiner model")?;
+            .map_err(|err| {
+                RefinerClientError::new(
+                    format!("failed to call YOLO refiner model: {err}"),
+                    diagnostic.clone(),
+                )
+            })?;
 
         let status = response.status();
         let body = response
@@ -95,11 +109,25 @@ impl RefinerClient {
             .await
             .context("failed to read YOLO refiner response body")?;
         if !status.is_success() {
-            anyhow::bail!("YOLO refiner returned HTTP {status}: {body}");
+            return Err(RefinerClientError::new(
+                format!(
+                    "YOLO refiner returned HTTP {status}: {}",
+                    tail(&body, 1_000)
+                ),
+                self.failure_diagnostic(&url, &request.summary, Some(status.as_u16()), Some(&body)),
+            )
+            .into());
         }
 
-        let parsed = serde_json::from_str::<ChatCompletionResponse>(&body)
-            .with_context(|| format!("failed to parse YOLO refiner response: {body}"))?;
+        let parsed = serde_json::from_str::<ChatCompletionResponse>(&body).map_err(|err| {
+            RefinerClientError::new(
+                format!(
+                    "failed to parse YOLO refiner response: {err}: {}",
+                    tail(&body, 1_000)
+                ),
+                self.failure_diagnostic(&url, &request.summary, Some(status.as_u16()), Some(&body)),
+            )
+        })?;
         let next_prompt = parsed
             .choices
             .first()
@@ -112,7 +140,57 @@ impl RefinerClient {
             next_prompt,
         })
     }
+
+    fn failure_diagnostic(
+        &self,
+        endpoint: &str,
+        request_summary: &str,
+        http_status: Option<u16>,
+        response_body: Option<&str>,
+    ) -> RefinerFailureDiagnostic {
+        RefinerFailureDiagnostic {
+            endpoint: endpoint.to_string(),
+            http_status,
+            response_body: response_body
+                .map(|body| redact_text(&tail(body, REFINER_DIAGNOSTIC_BODY_LIMIT))),
+            request_summary_chars: request_summary.chars().count(),
+            request_summary_preview: redact_text(&tail(
+                request_summary,
+                REFINER_DIAGNOSTIC_REQUEST_LIMIT,
+            )),
+            message_roles: vec!["system".to_string(), "user".to_string()],
+            max_tokens: REFINER_MAX_TOKENS,
+            temperature: REFINER_TEMPERATURE.to_string(),
+        }
+    }
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct RefinerClientError {
+    message: String,
+    diagnostic: RefinerFailureDiagnostic,
+}
+
+impl RefinerClientError {
+    fn new(message: String, diagnostic: RefinerFailureDiagnostic) -> Self {
+        Self {
+            message: redact_text(&message),
+            diagnostic,
+        }
+    }
+
+    pub(crate) fn diagnostic(&self) -> RefinerFailureDiagnostic {
+        self.diagnostic.clone()
+    }
+}
+
+impl std::fmt::Display for RefinerClientError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(formatter)
+    }
+}
+
+impl std::error::Error for RefinerClientError {}
 
 #[derive(Debug, Serialize)]
 struct ChatCompletionRequest<'a> {
@@ -197,5 +275,52 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.next_prompt, "Run tests next.");
+    }
+
+    #[tokio::test]
+    async fn refiner_client_reports_sanitized_http_failure_diagnostics() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/chat/completions"))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "error": {
+                    "message": "context limit exceeded with Authorization: Bearer sk_test_123456789abcdef",
+                    "type": "BadRequestError"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let env = HashMap::from([
+            (
+                "QWEN_CODEX_YOLO_REFINER_BASE_URL".to_string(),
+                format!("{}/v1", server.uri()),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REFINER_API_KEY".to_string(),
+                "refiner-key".to_string(),
+            ),
+        ]);
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+        let client = RefinerClient::new(&config).unwrap();
+
+        let err = client
+            .refine(RefinerRequest {
+                iteration: 1,
+                summary: "Authorization: Bearer sk_test_123456789abcdef".to_string(),
+            })
+            .await
+            .unwrap_err();
+
+        let err = err.downcast_ref::<RefinerClientError>().unwrap();
+        let diagnostic = err.diagnostic();
+        assert_eq!(diagnostic.http_status, Some(400));
+        assert_eq!(diagnostic.message_roles, vec!["system", "user"]);
+        assert_eq!(diagnostic.max_tokens, REFINER_MAX_TOKENS);
+        assert!(diagnostic.endpoint.ends_with("/v1/chat/completions"));
+        assert!(diagnostic.response_body.unwrap().contains("[REDACTED]"));
+        assert!(diagnostic.request_summary_preview.contains("[REDACTED]"));
     }
 }
