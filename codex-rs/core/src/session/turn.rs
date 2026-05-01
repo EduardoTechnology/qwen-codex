@@ -1856,6 +1856,15 @@ async fn try_run_sampling_request(
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let qwen_responses_compat = is_qwen_provider_name(&turn_context.provider.info().name);
     let mut qwen_reasoning_text = String::new();
+    let mut qwen_saw_tool_output = qwen_responses_compat
+        && prompt.input.iter().any(|item| {
+            matches!(
+                item,
+                ResponseItem::FunctionCallOutput { .. }
+                    | ResponseItem::CustomToolCallOutput { .. }
+                    | ResponseItem::ToolSearchOutput { .. }
+            )
+        });
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -1919,6 +1928,14 @@ async fn try_run_sampling_request(
                         | ResponseItem::ImageGenerationCall { .. }
                         | ResponseItem::Compaction { .. }
                         | ResponseItem::Other => {}
+                    }
+                    if matches!(
+                        &item,
+                        ResponseItem::FunctionCallOutput { .. }
+                            | ResponseItem::CustomToolCallOutput { .. }
+                            | ResponseItem::ToolSearchOutput { .. }
+                    ) {
+                        qwen_saw_tool_output = true;
                     }
                 }
                 if let Some((_, mut consumer)) = active_tool_argument_diff_consumer.take()
@@ -1990,7 +2007,9 @@ async fn try_run_sampling_request(
                 if let Some(tool_future) = output_result.tool_future {
                     in_flight.push_back(tool_future);
                 }
-                if let Some(agent_message) = output_result.last_agent_message {
+                if let Some(agent_message) = output_result.last_agent_message
+                    && (!qwen_responses_compat || !agent_message.trim().is_empty())
+                {
                     last_agent_message = Some(agent_message);
                 }
                 needs_follow_up |= output_result.needs_follow_up;
@@ -2122,7 +2141,11 @@ async fn try_run_sampling_request(
                 }
                 if qwen_responses_compat
                     && last_agent_message.is_none()
-                    && let Some(item) = synthesize_qwen_reasoning_only_message(&qwen_reasoning_text)
+                    && let Some(item) = synthesize_qwen_reasoning_only_message(
+                        &qwen_reasoning_text,
+                        needs_follow_up,
+                        qwen_saw_tool_output,
+                    )
                 {
                     let mut ctx = HandleOutputCtx {
                         sess: sess.clone(),

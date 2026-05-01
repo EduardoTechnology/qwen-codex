@@ -35,3 +35,12 @@
 - Result: the refiner now calls `/chat/completions` successfully with bounded payloads. The live YOLO run completed exactly two iterations, logged non-empty `refinerResponse` and `nextPrompt`, injected round 1 `nextPrompt` into round 2, and passed secret redaction. The main Qwen/vLLM Responses history after tool calls still needs a separate provider-compatibility fix.
 - Commit hash: `d829e895824c106efd5a86f93fc805c1158654c9`.
 - Next step: diagnose and fix the Qwen-only Responses compatibility failure after tool calls and resume.
+
+## 2026-05-01T21:09:39Z
+
+- Objective: stabilize Qwen/vLLM Responses compatibility after tool calls for normal and YOLO modes.
+- Files changed summary: normalized Qwen-bound assistant message content to vLLM-compatible input text, removed synthetic Qwen warning messages from outbound history, skipped empty Qwen assistant messages when determining whether a final answer exists, preserved tool-call/tool-output history, added safe Qwen final-message synthesis after tool output, and made bare `qwen-codex` prompts use workspace-write sandbox for actual project edits.
+- Tests run: `just fmt`; `cargo test -p codex-core qwen_compat -- --nocapture`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; live normal tool smoke in `/tmp/qwen-normal-tool-test`; live two-iteration YOLO smoke in `/tmp/yolo-smoke`.
+- Result: Qwen/vLLM Responses validation errors after tool calls are gone in the live smokes. Normal mode created `README.md` and `hello.py`, ran `python hello.py`, and produced visible assistant text. YOLO created `hello.txt` in iteration 1 and `README.md` in iteration 2; iteration 2 input matched iteration 1 `nextPrompt`; errors arrays were empty; secret redaction passed.
+- Commit hash: `PENDING`.
+- Next step: verify/document 32k context compaction, behavior/tool capabilities, upstream baseline, and final docs.

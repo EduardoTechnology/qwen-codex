@@ -246,6 +246,7 @@ fn normalize_normal_args(args: Vec<String>) -> Vec<String> {
     }
 
     let mut normalized = vec!["exec".to_string(), "--skip-git-repo-check".to_string()];
+    normalized.extend(["--sandbox".to_string(), "workspace-write".to_string()]);
     normalized.extend(args);
     normalized
 }
@@ -388,6 +389,8 @@ mod tests {
                 codex_args: vec![
                     "exec".to_string(),
                     "--skip-git-repo-check".to_string(),
+                    "--sandbox".to_string(),
+                    "workspace-write".to_string(),
                     "What is 2+2?".to_string()
                 ]
             }
