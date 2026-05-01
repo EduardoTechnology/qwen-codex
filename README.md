@@ -114,6 +114,18 @@ Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless 
 
 Qwen Codex can run shell commands and edit files through upstream Codex tools. Review generated changes, keep secrets out of prompts when possible, and use temporary workspaces for destructive experiments. YOLO logs redact common API keys, tokens, authorization headers, `.env` assignments, credentials, and private keys before writing to disk.
 
+## Context Window
+
+Set `QWEN_CODEX_CONTEXT_WINDOW` to match the vLLM `--max-model-len` value. The provided compose file and verified local server use `32768`.
+
+Qwen Codex derives a conservative auto-compact threshold from that value:
+
+```text
+threshold = min(context_window * 0.80, context_window - 4096)
+```
+
+For `32768`, the default Qwen auto-compact threshold is `26214` tokens. Long or unlimited YOLO runs depend on upstream Codex compaction and should be stress-tested before unattended production use.
+
 ## Build And Test
 
 ```sh
@@ -136,6 +148,12 @@ Root formatting uses:
 ```sh
 pnpm run format
 ```
+
+## Development Notes
+
+`pnpm run format` emits a Node.js engine warning on Node v20; Node v22+ is required for full compatibility but formatting still passes.
+
+The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside a Docker service network, use the service hostname and container port, for example `http://qwen35-vllm:8000/v1`. Do not use host port `8000` if another local service already owns it.
 
 ## Documentation
 

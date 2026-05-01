@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-01T20:10:00Z
+Last updated: 2026-05-01T21:16:00Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -64,8 +64,14 @@ The verified vLLM server works with Chat Completions and `/v1/models`. The vLLM 
 Qwen Codex keeps the server-side thinking fix in the public compose file and adds the smallest runtime compatibility layer only for the `Qwen local OpenAI-compatible` provider:
 
 - Developer-role messages are moved into the Responses `instructions` field because this vLLM build rejects `role: developer`.
-- If a Qwen Responses stream completes with reasoning text but no final assistant message, Qwen Codex synthesizes a final assistant message from recognizable final-answer reasoning markers.
+- Qwen-bound history strips reasoning items, empty assistant messages, phase metadata, synthetic warning messages, and vLLM-incompatible assistant `output_text` message content before sending history back to vLLM.
+- If a Qwen Responses stream completes with reasoning text or tool output but no final assistant message, Qwen Codex synthesizes a final assistant message from recognizable final-answer/summary markers or a short completion acknowledgement.
 - The compatibility path does not run for upstream OpenAI/default providers.
+
+Live tool-call compatibility verification:
+
+- `/tmp/qwen-normal-tool-test`: `qwen-codex` created `README.md` and `hello.py` in the current directory, ran `python hello.py`, printed `HELLO`, exited `0`, and emitted visible assistant text. No Qwen/vLLM validation errors and no `local-dev-key` leak were found in `output.log`.
+- `/tmp/yolo-smoke`: `qwen-codex --yolo --iterations 2` created `hello.txt` in iteration 1 and `README.md` in iteration 2. `iteration-002.json.agentInputPrompt == iteration-001.json.nextPrompt`, both iteration `errors` arrays were empty, and log redaction did not leak `local-dev-key`.
 
 ## Normal CLI Milestone Status
 
@@ -124,8 +130,44 @@ YOLO behavior covered by tests:
 - Refiner client call against a mocked OpenAI-compatible `/v1/chat/completions` endpoint.
 - YOLO refiner env/config loading.
 
-Not run in this milestone:
+Live YOLO verification:
 
-- Full Rust workspace test suite. This milestone used scoped tests for the changed crates and focused Qwen compatibility tests.
-- End-to-end YOLO run against the local vLLM server. The unit tests mock the refiner and agent paths; a live multi-iteration run should be done next in a temporary workspace.
-- Behavioral web/PDF/DOCX/XLSX tool tests. Those remain open validation tasks for the broader project.
+```text
+Run directory: /tmp/yolo-smoke/.qwen-codex/yolo-runs/20260501T210832Z-1510775
+Exit: 0
+Stop reason: RefinerStopSignal after 2 iterations
+Created files: hello.txt, README.md
+Round 2 prompt injection: iteration-002.agentInputPrompt == iteration-001.nextPrompt
+Errors: []
+Secret redaction: PASS
+```
+
+## Context Management
+
+Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.
+
+Evidence:
+
+- `codex-rs/qwen/src/config.rs` reads `QWEN_CODEX_CONTEXT_WINDOW` and emits `model_context_window=32768`.
+- The same config path emits `model_auto_compact_token_limit=26214`.
+- Qwen threshold formula: `min(context_window * 0.80, context_window - 4096)`.
+- Unit coverage: `32768 -> 26214`, `8192 -> 4096`, `4096 -> 0`.
+- `codex-rs/models-manager/src/model_info.rs` applies `model_context_window` and `model_auto_compact_token_limit` overrides to model metadata.
+- `codex-rs/core/src/session/turn.rs` uses `model_info.auto_compact_token_limit()` for pre-turn and mid-turn compaction.
+- `codex-rs/core/src/session/turn_context.rs` derives the effective context window from resolved model metadata.
+- YOLO calls normal `codex exec --json` and then `codex exec --json resume <thread-id> <prompt>`, so it uses the same Qwen config and upstream compaction path as normal mode.
+
+Long-running/infinite YOLO compaction has not been stress-tested beyond config propagation and unit coverage.
+
+## Behavioral Tool Tests
+
+Workspace: `/tmp/tool-test`.
+
+| Capability      | Result               | Evidence                                                                                                                                                                 |
+| --------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Web search      | `CAPABILITY_MISSING` | Prompt attempted `web_search`; upstream router logged `unsupported call: web_search`.                                                                                    |
+| PDF generation  | `PASS`               | `test.pdf` exists; `file` reports `PDF document, version 1.4, 1 page(s), ASCII text`.                                                                                    |
+| DOCX generation | `PASS`               | `test.docx` exists; `file` reports `Microsoft Word 2007+`; `word/document.xml` contains `Hello World`.                                                                   |
+| XLSX generation | `FAIL`               | Prompt attempted package-based spreadsheet creation, but `pandas`/`openpyxl` were unavailable and network/package installation was blocked; `test.xlsx` was not created. |
+
+The behavioral tests verify agent/tool execution through shell/file creation, not dedicated first-class PDF/DOCX/XLSX skills. Missing or failed capabilities are tracked in `docs/roadmap.md`.

@@ -44,3 +44,12 @@
 - Result: Qwen/vLLM Responses validation errors after tool calls are gone in the live smokes. Normal mode created `README.md` and `hello.py`, ran `python hello.py`, and produced visible assistant text. YOLO created `hello.txt` in iteration 1 and `README.md` in iteration 2; iteration 2 input matched iteration 1 `nextPrompt`; errors arrays were empty; secret redaction passed.
 - Commit hash: `db8e68aecd9f02e0852c7aefbd3b5a9cc70038eb`.
 - Next step: verify/document 32k context compaction, behavior/tool capabilities, upstream baseline, and final docs.
+
+## 2026-05-01T21:23:11Z
+
+- Objective: document final live verification, 32k context safety, behavioral tool results, and upstream baseline.
+- Files changed summary: updated README context/development notes, YOLO context-management docs, verification evidence, roadmap capability status, and research notes with the latest upstream baseline.
+- Tests run: `git fetch upstream`; `git log upstream/main --oneline -5`; `cargo test -p codex-qwen yolo_loop_guard -- --nocapture`; behavioral web/PDF/DOCX/XLSX tests in `/tmp/tool-test`; `just fmt`; `cargo fmt --check`; `cargo test -p codex-qwen`; `cargo test -p codex-core qwen_compat`; `cargo test -p codex-model-provider`; `cargo build -p codex-cli`; `just bazel-lock-check`; `pnpm run format`; `git diff --check`; native CLI smoke tests for `qwen-codex --help`, `qwen-codex --version`, `qwencodex --help`, `qwen-codex --health`; live `What is 2+2?` smoke.
+- Result: final scoped checks passed. `pnpm run format` passes but emits the documented Node v20 engine warning. Web search is capability-missing, PDF and DOCX passed, XLSX failed because package-based spreadsheet generation could not create `test.xlsx`. Auto-compact config propagation is confirmed at `32768 -> 26214`, but long-run compaction stress testing remains open.
+- Commit hash: `PENDING`.
+- Next step: open a PR from `feature/qwen-codex-local-yolo` to `main` and decide whether to add first-class document/spreadsheet helper skills before release.

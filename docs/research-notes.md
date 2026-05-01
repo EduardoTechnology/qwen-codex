@@ -1,6 +1,6 @@
 # Research Notes
 
-Last updated: 2026-05-01T20:10:00Z
+Last updated: 2026-05-01T21:16:00Z
 
 ## Repository Structure
 
@@ -97,6 +97,7 @@ The healthy local server uses host base URL `http://127.0.0.1:8002/v1`, served m
 - Qwen config belongs in the wrapper crate. Runtime defaults are centralized in `codex-rs/qwen/src/config.rs`; `.env.example` and `modelo/` document the verified local values.
 - vLLM `/v1/models` returns the OpenAI-compatible `{"object":"list","data":[...]}` shape, while Codex's model metadata manager expects the Codex model catalog shape. Custom providers with `requires_openai_auth = false` should not inherit the user's OpenAI auth manager; this avoids trying to refresh Codex backend model metadata for local vLLM while preserving first-party OpenAI behavior.
 - The verified Qwen/vLLM Responses API still produced reasoning-only streams in this environment despite the server-side `enable_thinking=false` fix. Qwen Codex therefore adds a provider-name-scoped compatibility shim that moves `developer` messages into `instructions` and synthesizes final assistant text from Qwen reasoning-only output when needed.
+- After tool calls, this vLLM Responses implementation rejects some upstream Responses history shapes, especially assistant message content with `output_text`, empty assistant messages, reasoning items, phase metadata, and synthetic warning messages. Qwen Codex strips or normalizes those items only for the Qwen provider before the request is sent back to vLLM.
 - Direct Chat Completions against the same server returned `4` for the arithmetic smoke prompt. The final Qwen Codex normal-mode smoke also returned visible assistant text `4` through `qwen-codex`.
 
 ## YOLO Implementation Findings
@@ -107,6 +108,25 @@ The healthy local server uses host base URL `http://127.0.0.1:8002/v1`, served m
 - Refiner calls use an OpenAI-compatible Chat Completions endpoint at `<refiner-base-url>/chat/completions`.
 - Logs are written as JSON and Markdown under `.qwen-codex/yolo-runs/<run-id>/` after passing through the Qwen redaction helper.
 - Loop guards stop on fixed iteration count, `YOLO_STOP`, repeated refiner prompts, repeated failures, and Ctrl+C between rounds.
+
+## Context Compaction Findings
+
+- Qwen Codex passes `model_context_window` and `model_auto_compact_token_limit` as upstream Codex config overrides.
+- `QWEN_CODEX_CONTEXT_WINDOW=32768` resolves to `model_context_window=32768`.
+- Qwen auto-compact threshold is derived as `min(context_window * 0.80, context_window - 4096)`.
+- For 32768 context, the threshold is `26214`.
+- Upstream `codex-rs/models-manager/src/model_info.rs` applies these overrides to model metadata.
+- Upstream `codex-rs/core/src/session/turn.rs` uses `model_info.auto_compact_token_limit()` for pre-turn and mid-turn compaction.
+- YOLO uses `codex exec --json` and `resume <thread-id>`, so it follows the same config and compaction path as normal Qwen Codex.
+- Long-run compaction is config-propagation confirmed but not stress-tested.
+
+## Upstream Baseline
+
+Fetched `upstream` on 2026-05-01. Latest observed `upstream/main` commit:
+
+```text
+aed74e5ee4 [codex] Emit image view as core item (#20512)
+```
 
 ## External Source Notes
 

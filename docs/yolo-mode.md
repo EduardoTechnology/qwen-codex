@@ -120,3 +120,25 @@ The default refiner system prompt asks the model to act as a senior product and 
 YOLO mode lives in the Qwen wrapper crate and calls the upstream Codex binary. The first iteration starts a normal `codex exec --json --skip-git-repo-check` turn. Later iterations use `codex exec --json --skip-git-repo-check resume <thread-id> <prompt>`.
 
 Because the normal Codex thread is resumed, future upstream changes to tools, skills, MCP handling, shell execution, file editing, and context compaction are automatically available to YOLO mode.
+
+## Context Management
+
+YOLO mode relies on upstream Codex context compaction. It does not implement a separate compactor.
+
+For Qwen Codex, `QWEN_CODEX_CONTEXT_WINDOW` must match the vLLM `--max-model-len` value. The verified default is:
+
+```text
+QWEN_CODEX_CONTEXT_WINDOW=32768
+```
+
+Qwen Codex derives a conservative auto-compact threshold from the configured context window:
+
+```text
+threshold = min(context_window * 0.80, context_window - 4096)
+```
+
+For the verified 32768-token model server, the threshold is `26214` tokens.
+
+This threshold is passed to upstream Codex as `model_auto_compact_token_limit`, while `model_context_window` is passed as `32768`. Long or unlimited YOLO runs depend on this propagation so upstream compaction starts before vLLM reaches the hard context limit.
+
+Status: config propagation is confirmed and covered by tests, but long-running YOLO compaction has not yet been stress-tested.
