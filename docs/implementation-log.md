@@ -42,5 +42,5 @@
 - Files changed summary: normalized Qwen-bound assistant message content to vLLM-compatible input text, removed synthetic Qwen warning messages from outbound history, skipped empty Qwen assistant messages when determining whether a final answer exists, preserved tool-call/tool-output history, added safe Qwen final-message synthesis after tool output, and made bare `qwen-codex` prompts use workspace-write sandbox for actual project edits.
 - Tests run: `just fmt`; `cargo test -p codex-core qwen_compat -- --nocapture`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; live normal tool smoke in `/tmp/qwen-normal-tool-test`; live two-iteration YOLO smoke in `/tmp/yolo-smoke`.
 - Result: Qwen/vLLM Responses validation errors after tool calls are gone in the live smokes. Normal mode created `README.md` and `hello.py`, ran `python hello.py`, and produced visible assistant text. YOLO created `hello.txt` in iteration 1 and `README.md` in iteration 2; iteration 2 input matched iteration 1 `nextPrompt`; errors arrays were empty; secret redaction passed.
-- Commit hash: `PENDING`.
+- Commit hash: `db8e68aecd9f02e0852c7aefbd3b5a9cc70038eb`.
 - Next step: verify/document 32k context compaction, behavior/tool capabilities, upstream baseline, and final docs.
