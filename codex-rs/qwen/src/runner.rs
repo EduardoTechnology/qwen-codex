@@ -171,6 +171,7 @@ YOLO OPTIONS:
     --refiner-api-key <KEY>       Refiner API key
     --refiner-model <MODEL>       Refiner model name
     --yolo-log-dir <DIR>          YOLO run log directory
+    --yolo-round-timeout-secs <N> Per-agent-round timeout; default is 600 seconds
     --max-repeated-prompts <N>    Repeated prompt guard
     --max-failures <N>            Repeated failure guard
     --dangerously-bypass-approvals-and-sandbox
@@ -183,6 +184,7 @@ ENVIRONMENT:
     QWEN_CODEX_CONTEXT_WINDOW     default: {context_window}
     QWEN_CODEX_REQUEST_TIMEOUT_MS default: {timeout_ms}
     QWEN_CODEX_LOG_LEVEL          default: {log_level}
+    QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS default: {round_timeout_secs}
 
     A local .env file in the current directory is loaded for QWEN_CODEX_* and supported alias variables.
     Precedence is CLI flags, QWEN_CODEX_* environment, short aliases, documented defaults.
@@ -200,7 +202,8 @@ EXAMPLES:
         api_key = DEFAULT_API_KEY,
         context_window = config.context_window,
         timeout_ms = config.request_timeout_ms,
-        log_level = config.log_level
+        log_level = config.log_level,
+        round_timeout_secs = config.yolo.round_timeout_secs
     );
 }
 

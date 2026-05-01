@@ -17,6 +17,7 @@ pub struct QwenCliOverrides {
     pub yolo_refiner_api_key: Option<String>,
     pub yolo_refiner_model: Option<String>,
     pub yolo_log_dir: Option<String>,
+    pub yolo_round_timeout_secs: Option<u64>,
     pub yolo_max_repeated_prompts: Option<u32>,
     pub yolo_max_failures: Option<u32>,
 }
@@ -194,6 +195,12 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--request-timeout-ms",
             &mut overrides.request_timeout_ms,
+        )? || consume_u64_flag(
+            &args,
+            &mut index,
+            arg,
+            "--yolo-round-timeout-secs",
+            &mut overrides.yolo_round_timeout_secs,
         )? {
             continue;
         }
@@ -504,6 +511,19 @@ mod tests {
         let parsed = parse_qwen_args(vec!["--yolo".to_string(), "--10".to_string()]).unwrap();
 
         assert_eq!(parsed.overrides.iterations, Some(10));
+    }
+
+    #[test]
+    fn parses_yolo_round_timeout() {
+        let parsed = parse_qwen_args(vec![
+            "--yolo-refiner".to_string(),
+            "--yolo-round-timeout-secs".to_string(),
+            "30".to_string(),
+            "Improve".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.overrides.yolo_round_timeout_secs, Some(30));
     }
 
     #[test]

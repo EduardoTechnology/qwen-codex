@@ -60,5 +60,14 @@
 - Files changed summary: added `--yolo-refiner` and `--yolorefiner` aliases, kept `--yolo` as backward-compatible refiner alias, forwarded `--dangerously-bypass-approvals-and-sandbox` to YOLO agent rounds only when explicitly passed, omitted workspace-write sandbox in that explicit bypass path, and documented the flag semantics.
 - Tests run: `cd codex-rs && just fmt`; `cargo test -p codex-qwen`; `cargo build -p codex-cli`; `qwen-codex --help`; `qwencodex --help`; `qwen-codex --version`; `qwen-codex --yolo-refiner --iterations 0 --dangerously-bypass-approvals-and-sandbox`.
 - Result: Qwen tests passed and native help shows `--yolo-refiner` as the preferred flag. Explicit bypass reaches upstream Codex as `approval: never` and `sandbox: danger-full-access`; the tiny live arithmetic smoke with the current local model returned the known Qwen reasoning-only warning, so the model-output part is not counted as a bypass verification.
-- Commit hash: pending.
+- Commit hash: `2eae1ed1b5d2e312ccd5c9df0533d669c513e0b4`.
 - Next step: run the requested five-round ecommerce YOLO UX test and document round quality.
+
+## 2026-05-01T22:04:15Z
+
+- Objective: fix YOLO issues exposed by the paused ecommerce UX run.
+- Files changed summary: added `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` and `--yolo-round-timeout-secs`, stopped YOLO cleanly with `round_timeout` when one agent round exceeds the configured limit, set the upstream Codex child to kill on future drop, changed JSON log redaction to operate on serde values before serialization, added timeout/logging tests with raw newlines, control characters, ANSI sequences, and `.env`-style secrets, and documented timeout behavior.
+- Tests run: `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo`; `cargo build -p codex-cli`; `qwen-codex --yolo-refiner --iterations 5 --yolo-round-timeout-secs 1 ...` in `/tmp/yolo-timeout-smoke`; `python3 -m json.tool run.json`; `python3 -m json.tool iteration-001.json`; `cd codex-rs && just fix -p codex-qwen`.
+- Result: focused YOLO tests passed, the native CLI built, the timeout smoke exited `0` after one iteration with `round_timeout`, the refiner was not called after timeout, and both JSON logs parsed successfully.
+- Commit hash: pending.
+- Next step: rerun the five-round ecommerce UX test after this fix is committed and pushed.

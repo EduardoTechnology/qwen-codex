@@ -142,6 +142,26 @@ Errors: []
 Secret redaction: PASS
 ```
 
+## YOLO Timeout And JSON Log Robustness
+
+The 5-round ecommerce UX run was paused after it exposed two Qwen Codex issues: the first agent round created files but did not hand control back to YOLO after more than 10 minutes, and interrupted JSON logs became invalid when post-serialization redaction rewrote escaped `.env` content.
+
+Fix verification:
+
+- `cd codex-rs && cargo test -p codex-qwen yolo`: passed, 23 tests.
+- `cd codex-rs && cargo build -p codex-cli`: passed.
+- `cd codex-rs && just fix -p codex-qwen`: passed.
+- `qwen-codex --help`: passed and documents `--yolo-round-timeout-secs <N>` plus `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS`.
+- Timeout smoke workspace: `/tmp/yolo-timeout-smoke`.
+- Timeout smoke command: `qwen-codex --yolo-refiner --iterations 5 --yolo-round-timeout-secs 1 "Create a file called timeout.txt with the word TIMEOUT inside it, then explain what you did."`
+- Timeout smoke result: process exited `0` after one iteration with `RoundTimeout`; no refiner response or next prompt was written.
+- Log path: `/tmp/yolo-timeout-smoke/.qwen-codex/yolo-runs/20260501T220234Z-1617463`.
+- JSON validation: `python3 -m json.tool run.json` passed; `python3 -m json.tool iteration-001.json` passed.
+- Parsed stop reasons: `run.json.stopReason == "round_timeout"` and `iteration-001.json.stopReason == "round_timeout"`.
+- Parsed error: `agent round timed out after 1 second(s)`.
+
+The ecommerce project itself was not evaluated further in this pass. The next planned step is to rerun the five-round ecommerce test after this timeout/logging fix is committed and pushed.
+
 ## Context Management
 
 Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.

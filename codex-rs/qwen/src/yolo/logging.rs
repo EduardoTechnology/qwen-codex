@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use chrono::Utc;
+use serde::Serialize;
+use serde_json::Value;
 use tokio::fs;
 
 use crate::redaction::redact_text;
@@ -27,23 +29,14 @@ impl YoloLogger {
     }
 
     pub(crate) async fn write_run(&self, run: &YoloRunLog) -> anyhow::Result<()> {
-        write_redacted(
-            &self.run_dir.join("run.json"),
-            &serde_json::to_string_pretty(run).context("failed to serialize YOLO run JSON")?,
-        )
-        .await?;
-        write_redacted(&self.run_dir.join("run.md"), &run_markdown(run)).await
+        write_json_redacted(&self.run_dir.join("run.json"), run).await?;
+        write_text_redacted(&self.run_dir.join("run.md"), &run_markdown(run)).await
     }
 
     pub(crate) async fn write_iteration(&self, iteration: &YoloIterationLog) -> anyhow::Result<()> {
         let stem = format!("iteration-{:03}", iteration.iteration);
-        write_redacted(
-            &self.run_dir.join(format!("{stem}.json")),
-            &serde_json::to_string_pretty(iteration)
-                .context("failed to serialize YOLO iteration JSON")?,
-        )
-        .await?;
-        write_redacted(
+        write_json_redacted(&self.run_dir.join(format!("{stem}.json")), iteration).await?;
+        write_text_redacted(
             &self.run_dir.join(format!("{stem}.md")),
             &iteration_markdown(iteration),
         )
@@ -63,7 +56,34 @@ pub(crate) fn now_timestamp() -> String {
     Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
-async fn write_redacted(path: &Path, contents: &str) -> anyhow::Result<()> {
+async fn write_json_redacted<T: Serialize>(path: &Path, value: &T) -> anyhow::Result<()> {
+    let mut value = serde_json::to_value(value).context("failed to serialize YOLO JSON value")?;
+    redact_json_strings(&mut value);
+    let contents =
+        serde_json::to_string_pretty(&value).context("failed to serialize redacted YOLO JSON")?;
+    fs::write(path, contents)
+        .await
+        .with_context(|| format!("failed to write {}", path.display()))
+}
+
+fn redact_json_strings(value: &mut Value) {
+    match value {
+        Value::String(text) => *text = redact_text(text),
+        Value::Array(values) => {
+            for value in values {
+                redact_json_strings(value);
+            }
+        }
+        Value::Object(values) => {
+            for value in values.values_mut() {
+                redact_json_strings(value);
+            }
+        }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
+    }
+}
+
+async fn write_text_redacted(path: &Path, contents: &str) -> anyhow::Result<()> {
     fs::write(path, redact_text(contents))
         .await
         .with_context(|| format!("failed to write {}", path.display()))
@@ -193,7 +213,49 @@ mod tests {
         let json = fs::read_to_string(logger.run_dir().join("iteration-001.json"))
             .await
             .unwrap();
+        serde_json::from_str::<Value>(&json).unwrap();
         assert!(json.contains("[REDACTED]"));
         assert!(!json.contains("sk_test_123456789abcdef"));
+    }
+
+    #[tokio::test]
+    async fn logger_redaction_preserves_valid_json_for_interrupted_output() {
+        let temp = TempDir::new().unwrap();
+        let logger = YoloLogger::new(temp.path(), "run").await.unwrap();
+        let iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "prompt".to_string(),
+            agent_output_summary:
+                "command: cat << 'EOF'\nMONGO_INITDB_ROOT_PASSWORD=secret123\n\u{0003}\u{001b}[31minterrupted\u{001b}[0m\nEOF"
+                    .to_string(),
+            actions_taken: vec![
+                "command: cat << 'EOF'\nMONGO_INITDB_ROOT_PASSWORD=secret123\n\u{0003}\u{001b}[31minterrupted\u{001b}[0m\nEOF"
+                    .to_string(),
+            ],
+            tool_calls_summary: Vec::new(),
+            changed_files: Vec::new(),
+            git_diff_summary: String::new(),
+            commands_tests_run: Vec::new(),
+            errors: Vec::new(),
+            current_git_status: String::new(),
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            stop_reason: Some(YoloStopReason::Interrupted),
+        };
+
+        logger.write_iteration(&iteration).await.unwrap();
+
+        let json = fs::read_to_string(logger.run_dir().join("iteration-001.json"))
+            .await
+            .unwrap();
+        serde_json::from_str::<Value>(&json).unwrap();
+        assert!(json.contains("[REDACTED]"));
+        assert!(!json.contains("secret123"));
     }
 }

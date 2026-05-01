@@ -10,6 +10,7 @@ pub(crate) struct YoloLoopConfig {
     pub original_prompt: String,
     pub iteration_limit: Option<u32>,
     pub log_root: PathBuf,
+    pub round_timeout_secs: u64,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
     pub base_url: String,
@@ -36,6 +37,7 @@ pub(crate) struct AgentRoundResult {
     pub errors: Vec<String>,
     pub stdout_tail: String,
     pub stderr_tail: String,
+    pub timed_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,6 +73,7 @@ pub(crate) enum YoloStopReason {
     RepeatedPromptGuard,
     FailureGuard,
     RefinerError,
+    RoundTimeout,
     Interrupted,
 }
 

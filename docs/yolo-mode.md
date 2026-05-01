@@ -37,6 +37,7 @@ QWEN_CODEX_YOLO_REFINER_BASE_URL=http://127.0.0.1:8002/v1
 QWEN_CODEX_YOLO_REFINER_API_KEY=local-dev-key
 QWEN_CODEX_YOLO_REFINER_MODEL=qwen35-local
 QWEN_CODEX_YOLO_LOG_DIR=.qwen-codex/yolo-runs
+QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS=600
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
 QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
@@ -59,6 +60,7 @@ CLI flags override environment values:
 --refiner-api-key <KEY>
 --refiner-model <MODEL>
 --yolo-log-dir <DIR>
+--yolo-round-timeout-secs <N>
 --max-repeated-prompts <N>
 --max-failures <N>
 ```
@@ -76,10 +78,13 @@ For each iteration, Qwen Codex:
 The loop stops when:
 
 - The fixed iteration limit is reached.
+- A single agent round exceeds `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS`, which defaults to 600 seconds.
 - The refiner returns `YOLO_STOP`.
 - The repeated-prompt guard triggers.
 - The consecutive-failure guard triggers.
 - Ctrl+C is received; the process stops cleanly between rounds.
+
+When a round times out, YOLO stops the run instead of trying to refine from an incomplete agent result. The iteration log records `stopReason: "round_timeout"` and an error such as `agent round timed out after 600 second(s)`. This prevents a stuck local model/tool turn from blocking unattended runs forever.
 
 ## Logging
 
@@ -120,6 +125,8 @@ Iteration logs include:
 - Stop reason when applicable
 
 Secrets are redacted before logs are written. The redactor covers common API keys, tokens, authorization headers, `.env` style secret assignments, credential fields, and private key blocks.
+
+JSON logs are redacted field-by-field before serialization, so raw newlines, ANSI escape sequences, interrupted output, and secret-like `.env` assignments remain valid JSON. Markdown logs are for human review only.
 
 ## Refiner Prompt
 

@@ -111,12 +111,15 @@ QWEN_CODEX_YOLO_REFINER_BASE_URL=http://127.0.0.1:8002/v1
 QWEN_CODEX_YOLO_REFINER_API_KEY=local-dev-key
 QWEN_CODEX_YOLO_REFINER_MODEL=qwen35-local
 QWEN_CODEX_YOLO_LOG_DIR=.qwen-codex/yolo-runs
+QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS=600
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
 QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
 ```
 
 Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless `--iterations` or `-n` is provided.
+
+`QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` prevents a single Codex agent round from blocking the autonomous loop forever. The default is 600 seconds. On timeout, YOLO kills the round, writes valid JSON/Markdown logs, and stops with `round_timeout`.
 
 ## Safety Notes
 

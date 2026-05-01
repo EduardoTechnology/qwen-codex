@@ -3,6 +3,7 @@ use std::io::Write;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
+use std::time::Duration;
 
 use anyhow::Context;
 use codex_arg0::Arg0DispatchPaths;
@@ -69,6 +70,7 @@ pub async fn run_yolo_mode(
         original_prompt: prompt,
         iteration_limit: config.yolo.default_iterations,
         log_root: config.yolo.log_dir.clone(),
+        round_timeout_secs: config.yolo.round_timeout_secs,
         max_repeated_prompts: config.yolo.max_repeated_prompts,
         max_failures: config.yolo.max_failures,
         base_url: config.base_url.clone(),
@@ -163,12 +165,20 @@ where
 
         let iteration = iterations_completed + 1;
         let current_git_status_before = git_status(&cwd).await;
-        let agent_result = run_agent(AgentRoundRequest {
+        let agent_request = AgentRoundRequest {
             iteration,
             prompt: current_prompt.clone(),
             thread_id: session_id.clone(),
-        })
-        .await;
+        };
+        let agent_result = match tokio::time::timeout(
+            Duration::from_secs(config.round_timeout_secs),
+            run_agent(agent_request),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => Ok(agent_round_timeout_result(config.round_timeout_secs)),
+        };
         let current_git_status = git_status(&cwd).await;
         let mut git_changed_files = changed_files_from_git_status(&current_git_status);
         if git_changed_files.is_empty() {
@@ -239,6 +249,20 @@ where
                 &mut run_log,
                 iterations_completed,
                 YoloStopReason::Interrupted,
+            )
+            .await?;
+            break;
+        }
+
+        if agent_result.timed_out {
+            iteration_log.stop_reason = Some(YoloStopReason::RoundTimeout);
+            iterations_completed = iteration;
+            write_iteration(&logger, &mut run_log, iteration_log).await?;
+            finish_run(
+                &logger,
+                &mut run_log,
+                iterations_completed,
+                YoloStopReason::RoundTimeout,
             )
             .await?;
             break;
@@ -455,6 +479,16 @@ Produce the next concrete prompt for the coding agent, or output YOLO_STOP."#,
     redact_text(&limit_text(&summary, REFINER_SUMMARY_MAX_CHARS))
 }
 
+fn agent_round_timeout_result(round_timeout_secs: u64) -> AgentRoundResult {
+    AgentRoundResult {
+        timed_out: true,
+        errors: vec![format!(
+            "agent round timed out after {round_timeout_secs} second(s)"
+        )],
+        ..AgentRoundResult::default()
+    }
+}
+
 fn interrupted(config: &YoloLoopConfig) -> bool {
     config
         .interrupt_flag
@@ -554,6 +588,7 @@ mod tests {
             original_prompt: "Build a demo".to_string(),
             iteration_limit,
             log_root: temp.path().join("logs"),
+            round_timeout_secs: 600,
             max_repeated_prompts: 3,
             max_failures: 3,
             base_url: "http://127.0.0.1:8002/v1".to_string(),
@@ -568,6 +603,51 @@ mod tests {
             final_response: Some("done".to_string()),
             ..AgentRoundResult::default()
         }
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_guard_round_timeout_stops_cleanly_without_refiner() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, None);
+        config.round_timeout_secs = 0;
+        let refiner_calls = Rc::new(RefCell::new(0_u32));
+        let refiner_calls_for_refiner = refiner_calls.clone();
+
+        let outcome = run_yolo_loop(
+            config,
+            |_| async {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                Ok(agent_result("session-1"))
+            },
+            move |_| {
+                let refiner_calls = refiner_calls_for_refiner.clone();
+                async move {
+                    *refiner_calls.borrow_mut() += 1;
+                    Ok(RefinerResponse {
+                        raw_response: "unused".to_string(),
+                        next_prompt: "unused".to_string(),
+                    })
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 1);
+        assert_eq!(outcome.stop_reason, YoloStopReason::RoundTimeout);
+        assert_eq!(*refiner_calls.borrow(), 0);
+
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(
+            iteration_log.stop_reason,
+            Some(YoloStopReason::RoundTimeout)
+        );
+        assert_eq!(
+            iteration_log.errors,
+            vec!["agent round timed out after 0 second(s)".to_string()]
+        );
     }
 
     #[tokio::test]

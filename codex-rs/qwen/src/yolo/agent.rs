@@ -44,21 +44,22 @@ impl CodexAgentRunner {
             self.dangerously_bypass_approvals_and_sandbox,
         );
 
-        let output = Command::new(&self.codex_exe)
+        let mut command = Command::new(&self.codex_exe);
+        command
+            .kill_on_drop(true)
             .args(args)
             .env_remove(QWEN_ENTRYPOINT_ENV)
             .envs(self.config.child_env())
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await
-            .with_context(|| {
-                format!(
-                    "failed to launch upstream Codex binary at {}",
-                    self.codex_exe.display()
-                )
-            })?;
+            .stderr(Stdio::piped());
+
+        let output = command.output().await.with_context(|| {
+            format!(
+                "failed to launch upstream Codex binary at {}",
+                self.codex_exe.display()
+            )
+        })?;
 
         Ok(parse_agent_output(
             output.status.code(),
@@ -344,6 +345,7 @@ mod tests {
                 errors: Vec::new(),
                 stdout_tail: stdout,
                 stderr_tail: String::new(),
+                timed_out: false,
             }
         );
     }

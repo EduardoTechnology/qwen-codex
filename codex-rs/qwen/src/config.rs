@@ -17,6 +17,7 @@ pub const DEFAULT_REASONING_PARSER: &str = "qwen3";
 pub const DEFAULT_TOOL_CALL_PARSER: &str = "qwen3_coder";
 pub const DEFAULT_AUTO_TOOL_CHOICE: bool = true;
 pub const DEFAULT_YOLO_LOG_DIR: &str = ".qwen-codex/yolo-runs";
+pub const DEFAULT_YOLO_ROUND_TIMEOUT_SECS: u64 = 600;
 pub const DEFAULT_YOLO_MAX_REPEATED_PROMPTS: u32 = 3;
 pub const DEFAULT_YOLO_MAX_FAILURES: u32 = 3;
 
@@ -42,6 +43,7 @@ pub struct ResolvedYoloConfig {
     pub refiner_model: String,
     pub log_dir: PathBuf,
     pub default_iterations: Option<u32>,
+    pub round_timeout_secs: u64,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
 }
@@ -169,6 +171,13 @@ impl ResolvedQwenConfig {
             "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS",
             Some("YOLO_DEFAULT_ITERATIONS"),
         )?;
+        let round_timeout_secs = resolve_u64(
+            overrides.yolo_round_timeout_secs,
+            env,
+            "QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS",
+            None,
+            DEFAULT_YOLO_ROUND_TIMEOUT_SECS,
+        )?;
         let max_repeated_prompts = resolve_u32(
             overrides.yolo_max_repeated_prompts,
             env,
@@ -201,6 +210,7 @@ impl ResolvedQwenConfig {
                 refiner_model,
                 log_dir,
                 default_iterations,
+                round_timeout_secs,
                 max_repeated_prompts,
                 max_failures,
             },
@@ -483,6 +493,10 @@ mod tests {
                 "7".to_string(),
             ),
             (
+                "QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS".to_string(),
+                "42".to_string(),
+            ),
+            (
                 "QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS".to_string(),
                 "4".to_string(),
             ),
@@ -500,6 +514,7 @@ mod tests {
                 refiner_model: "refiner-model".to_string(),
                 log_dir: PathBuf::from(".custom-yolo"),
                 default_iterations: Some(7),
+                round_timeout_secs: 42,
                 max_repeated_prompts: 4,
                 max_failures: 2,
             }
