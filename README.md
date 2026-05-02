@@ -95,9 +95,11 @@ qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localho
 
 `--yolo-refiner` is the preferred explicit flag. `--yolo` remains supported for compatibility, but upstream Codex also uses `--yolo` as an alias for `--dangerously-bypass-approvals-and-sandbox`.
 
-With `--iterations N`, YOLO runs exactly `N` rounds unless the user interrupts it, one round times out with timeout continuation disabled, the agent subprocess fails, or the failure guard triggers. The refiner cannot stop the run by default; `YOLO_STOP` is treated as an invalid next prompt and repaired into a focused continuation prompt. Optional early stop is available only with `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true`.
+Without `--iterations`, YOLO runs in infinite mode until an accepted `YOLO_STOP` signal or a safety stop. Safety stops include Ctrl+C, round timeout, repeated prompt guard, repeated failure guard, agent/refiner/provider fatal errors, failed acceptance repair, and context/compaction fatal errors from the delegated Codex process.
 
-Without `--iterations`, or with `--iterations 0`, YOLO runs until Ctrl+C, timeout, the failure guard, or a fatal agent/refiner error. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as JSON and Markdown, with secrets redacted.
+With `--iterations N`, `-n N`, or the optional `--10` shorthand, YOLO runs at most `N` rounds. An accepted `YOLO_STOP` may stop earlier. If the acceptance gate is enabled and the run reaches the max iteration limit, acceptance commands run before the final status is marked successful. `--iterations 0` is invalid; omit `--iterations` for infinite mode.
+
+Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as JSON and Markdown, with secrets redacted.
 
 Each run also writes `analysis.json` and `analysis.md`, which summarize stop reason, round chaining, agent subprocess status, refiner calls, changed files, and diagnostics in one place.
 
@@ -123,7 +125,7 @@ QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS=3
 QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS=3000
 QWEN_CODEX_YOLO_REFINER_STYLE=incremental
 QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false
-QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false
+QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true
 QWEN_CODEX_YOLO_VERIFY_COMMANDS=
 QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS=15
 QWEN_CODEX_YOLO_ACCEPTANCE_GATE=false
@@ -135,7 +137,7 @@ QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
 ```
 
-Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless `--iterations` or `-n` is provided.
+Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for infinite YOLO mode unless `--iterations` or `-n` is provided. A value of `0` is invalid.
 
 `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS` prevents a single Codex agent round from blocking the autonomous loop forever. The default is 600 seconds. On timeout, YOLO kills the round, writes valid JSON/Markdown/analysis logs, skips the refiner, and stops with `round_timeout`.
 
@@ -160,6 +162,8 @@ qwen-codex --yolo-refiner --iterations 6 \
 
 When `QWEN_CODEX_YOLO_ACCEPTANCE_GATE=true`, `YOLO_STOP` is rejected if any acceptance command fails. The failed command output is logged under `acceptanceResults`, included in the refiner context, and converted into a bounded repair prompt. Fixed-iteration runs also execute acceptance commands before stopping at `max_iterations`, so failed acceptance checks mark the final status as partial instead of success.
 
+For Docker projects, prefer `docker compose config` before build, run `docker compose build` only when necessary, use `docker compose up -d` instead of foreground `up`, wrap long commands with `timeout` where appropriate, and run `docker compose down` after runtime checks. Avoid combining large feature work and heavy Docker verification in one round; if a round uses more than 80% of its timeout, the next refiner prompt is instructed to shrink scope.
+
 ## Safety Notes
 
 Qwen Codex can run shell commands and edit files through upstream Codex tools. Review generated changes, keep secrets out of prompts when possible, and use temporary workspaces for destructive experiments. YOLO logs redact common API keys, tokens, authorization headers, `.env` assignments, credentials, and private keys before writing to disk.
@@ -174,7 +178,7 @@ Qwen Codex derives a conservative auto-compact threshold from that value:
 threshold = min(context_window * 0.80, context_window - 4096)
 ```
 
-For `32768`, the default Qwen auto-compact threshold is `26214` tokens. Long or unlimited YOLO runs depend on upstream Codex compaction and should be stress-tested before unattended production use.
+For `32768`, the default Qwen auto-compact threshold is `26214` tokens. Long or infinite YOLO runs depend on upstream Codex compaction and should be stress-tested before unattended production use.
 
 ## Build And Test
 

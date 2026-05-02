@@ -26,7 +26,7 @@ pub const DEFAULT_YOLO_ROUND_GOAL_MAX_TESTS: u32 = 3;
 pub const DEFAULT_YOLO_REFINER_MAX_PROMPT_CHARS: u32 = 3_000;
 pub const DEFAULT_YOLO_REFINER_STYLE: &str = "incremental";
 pub const DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT: bool = false;
-pub const DEFAULT_YOLO_ALLOW_REFINER_STOP: bool = false;
+pub const DEFAULT_YOLO_ALLOW_REFINER_STOP: bool = true;
 pub const DEFAULT_YOLO_VERIFY_TIMEOUT_SECS: u64 = 15;
 pub const DEFAULT_YOLO_ACCEPTANCE_GATE: bool = false;
 pub const DEFAULT_YOLO_ACCEPTANCE_MAX_SECONDS: u64 = 300;
@@ -200,7 +200,15 @@ impl ResolvedQwenConfig {
             "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS",
             Some("YOLO_DEFAULT_ITERATIONS"),
         )?
-        .filter(|limit| *limit > 0);
+        .map(|limit| {
+            if limit == 0 {
+                anyhow::bail!(
+                    "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS must be greater than 0; unset it for infinite YOLO mode"
+                );
+            }
+            Ok(limit)
+        })
+        .transpose()?;
         let round_timeout_secs = resolve_u64(
             overrides.yolo_round_timeout_secs,
             env,
@@ -807,13 +815,13 @@ mod tests {
     }
 
     #[test]
-    fn yolo_safety_options_are_disabled_by_default() {
+    fn yolo_optional_safety_options_use_documented_defaults() {
         let config =
             ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &HashMap::new())
                 .unwrap();
 
         assert!(!config.yolo.continue_after_timeout);
-        assert!(!config.yolo.allow_refiner_stop);
+        assert!(config.yolo.allow_refiner_stop);
         assert!(config.yolo.verify_commands.is_empty());
         assert_eq!(
             config.yolo.verify_timeout_secs,
@@ -848,16 +856,25 @@ mod tests {
     }
 
     #[test]
-    fn yolo_zero_iterations_means_unlimited() {
+    fn yolo_iterations_are_unlimited_when_unset() {
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &HashMap::new())
+                .unwrap();
+
+        assert_eq!(config.yolo.default_iterations, None);
+    }
+
+    #[test]
+    fn yolo_zero_iterations_is_invalid() {
         let env = HashMap::from([(
             "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS".to_string(),
             "0".to_string(),
         )]);
 
-        let config =
-            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+        let err = ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env)
+            .expect_err("zero iteration limit should be invalid");
 
-        assert_eq!(config.yolo.default_iterations, None);
+        assert!(err.to_string().contains("unset it for infinite YOLO mode"));
     }
 
     #[test]

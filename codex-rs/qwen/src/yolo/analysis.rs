@@ -6,6 +6,8 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::yolo::agent::tail;
+use crate::yolo::round_duration_near_timeout;
+use crate::yolo::timeout_utilization_percent;
 use crate::yolo::types::ExternalVerificationResult;
 use crate::yolo::types::RefinerSkippedReason;
 use crate::yolo::types::RoundBudget;
@@ -24,6 +26,7 @@ pub(crate) struct YoloRunAnalysis {
     pub model: String,
     pub base_url: String,
     pub iteration_limit: Option<u32>,
+    pub round_timeout_secs: u64,
     pub round_budget: RoundBudget,
     pub continue_after_timeout: bool,
     pub allow_refiner_stop: bool,
@@ -49,6 +52,8 @@ pub(crate) struct YoloRunAnalysis {
 pub(crate) struct YoloRoundAnalysis {
     pub iteration: u32,
     pub duration_seconds: u64,
+    pub timeout_utilization_percent: u32,
+    pub round_duration_near_timeout: bool,
     pub stop_reason: Option<YoloStopReason>,
     pub agent_input_preview: String,
     pub agent_output_summary_preview: String,
@@ -134,6 +139,14 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
             YoloRoundAnalysis {
                 iteration: iteration.iteration,
                 duration_seconds: iteration.agent_round_duration_seconds,
+                timeout_utilization_percent: timeout_utilization_percent(
+                    iteration.agent_round_duration_seconds,
+                    run.round_timeout_secs,
+                ),
+                round_duration_near_timeout: round_duration_near_timeout(
+                    iteration.agent_round_duration_seconds,
+                    run.round_timeout_secs,
+                ),
                 stop_reason: iteration.stop_reason.clone(),
                 agent_input_preview: preview(&iteration.current_agent_input_prompt),
                 agent_output_summary_preview: preview(&iteration.agent_output_summary),
@@ -191,6 +204,7 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
         model: run.model.clone(),
         base_url: run.base_url.clone(),
         iteration_limit: run.iteration_limit,
+        round_timeout_secs: run.round_timeout_secs,
         round_budget: run.round_budget.clone(),
         continue_after_timeout: run.continue_after_timeout,
         allow_refiner_stop: run.allow_refiner_stop,
@@ -250,8 +264,9 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
     }
     out.push_str("\n## Round Budget\n\n");
     out.push_str(&format!(
-        "- Style: `{}`\n- Max files per round: `{}`\n- Max actions per round: `{}`\n- Max verification commands per round: `{}`\n- Max next prompt chars: `{}`\n- Continue after timeout: `{}`\n- Allow refiner stop: `{}`\n",
+        "- Style: `{}`\n- Round timeout: `{}s`\n- Max files per round: `{}`\n- Max actions per round: `{}`\n- Max verification commands per round: `{}`\n- Max next prompt chars: `{}`\n- Continue after timeout: `{}`\n- Allow refiner stop: `{}`\n",
         analysis.round_budget.style,
+        analysis.round_timeout_secs,
         analysis.round_budget.max_files,
         analysis.round_budget.max_actions,
         analysis.round_budget.max_tests,
@@ -314,17 +329,19 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
     );
     out.push_str("\n## Action Diagnostics\n\n");
     out.push_str(
-        "| Round | Actions | Tool calls | Commands | Files | No-action round | Stop signal |\n",
+        "| Round | Actions | Tool calls | Commands | Files | Timeout % | Near timeout | No-action round | Stop signal |\n",
     );
-    out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for round in &analysis.rounds {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             round.iteration,
             round.actions_captured_count,
             round.tool_calls_captured_count,
             round.commands_captured_count,
             round.files_changed_count,
+            round.timeout_utilization_percent,
+            round.round_duration_near_timeout,
             round.no_action_round,
             stop_signal_status(round)
         ));
@@ -651,6 +668,7 @@ mod tests {
             base_url: "http://127.0.0.1:8002/v1".to_string(),
             model: "qwen35-local".to_string(),
             iteration_limit: Some(2),
+            round_timeout_secs: 600,
             round_budget: RoundBudget::default(),
             allow_refiner_stop: false,
             verify_commands: Vec::new(),
@@ -690,8 +708,11 @@ mod tests {
         );
         assert_eq!(analysis.duration_seconds, 60);
         assert_eq!(analysis.final_status, "success");
+        assert_eq!(analysis.round_timeout_secs, 600);
         assert_eq!(analysis.round_budget, RoundBudget::default());
         assert!(!analysis.continue_after_timeout);
+        assert_eq!(analysis.rounds[0].timeout_utilization_percent, 0);
+        assert!(!analysis.rounds[0].round_duration_near_timeout);
         assert_eq!(analysis.rounds[0].next_prompt_validation_passed, Some(true));
     }
 

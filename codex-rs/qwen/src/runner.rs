@@ -163,10 +163,10 @@ OPTIONS:
     --version, -V                 Show qwen-codex version
 
 YOLO OPTIONS:
-    --yolo-refiner                Start autonomous refinement mode
+    --yolo-refiner                Start autonomous refinement mode; without an iteration limit, runs until YOLO_STOP or a safety stop
     --yolorefiner                 Compatibility alias for --yolo-refiner
-    --yolo                        Backward-compatible alias; upstream Codex also uses this as a dangerous bypass alias
-    --iterations, -n <COUNT>      Run a fixed number of refinement iterations
+    --yolo                        Enable YOLO refiner mode; without an iteration limit, runs until YOLO_STOP or a safety stop
+    --iterations, -n <COUNT>      Optional max round limit; must be greater than 0
     --refiner-base-url <URL>      OpenAI-compatible refiner endpoint
     --refiner-api-key <KEY>       Refiner API key
     --refiner-model <MODEL>       Refiner model name
@@ -179,7 +179,7 @@ YOLO OPTIONS:
                                   Maximum accepted refiner next-prompt length
     --yolo-refiner-style <STYLE>  Refiner planning style; default is incremental
     --yolo-continue-after-timeout Continue with a smaller retry prompt after timeout; default false
-    --yolo-allow-refiner-stop     Allow YOLO_STOP to end the run; default false
+    --yolo-allow-refiner-stop     Allow YOLO_STOP to end the run; default true
     --yolo-verify-commands <CMDS> Run semicolon-separated shell commands after each round
     --yolo-verify-timeout-secs <N>
                                   Timeout for each external verification command; default 15 seconds
@@ -215,6 +215,10 @@ ENVIRONMENT:
     QWEN_CODEX_YOLO_ACCEPTANCE_MAX_SECONDS default: {acceptance_max_seconds}
     QWEN_CODEX_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE default: {reject_stop_on_failed_acceptance}
 
+    Safety stops include accepted YOLO_STOP, Ctrl+C, round timeout, repeated prompt guard,
+    repeated failure guard, agent/refiner/provider fatal errors, failed acceptance repair,
+    and context/compaction fatal errors from the delegated Codex process.
+
     A local .env file in the current directory is loaded for QWEN_CODEX_* and supported alias variables.
     Precedence is CLI flags, QWEN_CODEX_* environment, short aliases, documented defaults.
 
@@ -222,6 +226,7 @@ EXAMPLES:
     qwen-codex --health
     qwen-codex "What is 2+2? Answer in one word."
     qwen-codex --model qwen35-local exec "Summarize this repository."
+    qwen-codex --yolo "Iteratively improve this project until acceptance is complete."
     qwen-codex --yolo-refiner --iterations 10 "Refine this project."
     qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Autonomously refine this project."
     qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2225" "Improve runtime health."

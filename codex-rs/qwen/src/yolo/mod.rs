@@ -135,6 +135,12 @@ where
     R: FnMut(RefinerRequest) -> RFut,
     RFut: Future<Output = anyhow::Result<RefinerResponse>>,
 {
+    if config.iteration_limit == Some(0) {
+        anyhow::bail!(
+            "--iterations must be greater than 0; omit --iterations for infinite YOLO mode"
+        );
+    }
+
     let run_id = new_run_id();
     let logger = YoloLogger::new(&config.log_root, &run_id).await?;
     let started_at = now_timestamp();
@@ -146,6 +152,7 @@ where
         base_url: config.base_url.clone(),
         model: config.model.clone(),
         iteration_limit: config.iteration_limit,
+        round_timeout_secs: config.round_timeout_secs,
         round_budget: config.round_budget.clone(),
         continue_after_timeout: config.continue_after_timeout,
         allow_refiner_stop: config.allow_refiner_stop,
@@ -185,7 +192,6 @@ where
 
         if config
             .iteration_limit
-            .filter(|limit| *limit > 0)
             .is_some_and(|limit| iterations_completed >= limit)
         {
             finish_run(
@@ -391,7 +397,6 @@ where
 
         if config
             .iteration_limit
-            .filter(|limit| *limit > 0)
             .is_some_and(|limit| iterations_completed + 1 >= limit)
         {
             run_final_acceptance_if_configured(&config, &mut iteration_log).await;
@@ -408,7 +413,7 @@ where
             break;
         }
 
-        let refiner_summary = build_refiner_summary(&iteration_log);
+        let refiner_summary = build_refiner_summary(&iteration_log, config.round_timeout_secs);
         iteration_log.refiner_input_summary = Some(refiner_summary.clone());
         let refiner_result = refine(RefinerRequest {
             iteration,
@@ -571,8 +576,7 @@ where
             last_refiner_prompt = Some(normalized_prompt);
             repeated_prompt_count = 1;
         }
-        if config.iteration_limit.filter(|limit| *limit > 0).is_none()
-            && repeated_prompt_count >= config.max_repeated_prompts
+        if config.iteration_limit.is_none() && repeated_prompt_count >= config.max_repeated_prompts
         {
             iteration_log.stop_reason = Some(YoloStopReason::RepeatedPromptGuard);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
@@ -629,7 +633,11 @@ async fn write_run_and_analysis(logger: &YoloLogger, run_log: &YoloRunLog) -> an
     logger.write_analysis(run_log).await
 }
 
-fn build_refiner_summary(iteration: &YoloIterationLog) -> String {
+fn build_refiner_summary(iteration: &YoloIterationLog, round_timeout_secs: u64) -> String {
+    let timeout_utilization_percent =
+        timeout_utilization_percent(iteration.agent_round_duration_seconds, round_timeout_secs);
+    let round_duration_near_timeout =
+        round_duration_near_timeout(iteration.agent_round_duration_seconds, round_timeout_secs);
     let summary = format!(
         r#"Original user prompt:
 {original}
@@ -668,6 +676,12 @@ Action diagnostics:
 - files changed: {files_count}
 - no-action round: {no_action_round}
 
+Round timing:
+- duration seconds: {duration_seconds}
+- timeout seconds: {round_timeout_secs}
+- timeout utilization percent: {timeout_utilization_percent}
+- roundDurationNearTimeout: {round_duration_near_timeout}
+
 Current git status:
 {status}
 
@@ -687,12 +701,14 @@ Next prompt contract:
 - Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
 - Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
 - If any external verification failed, target that failure before adding unrelated scope.
+- If roundDurationNearTimeout is true, make the next prompt smaller than the prior round and avoid combining large implementation work with heavy verification.
+- For Docker projects, prefer docker compose config before build, run docker compose build only when necessary, use docker compose up -d instead of foreground up, wrap long commands with timeout where appropriate, and run docker compose down after runtime checks.
 - If a Docker/web project has frontend HTTP 500, backend health failure, products endpoint failure, Docker build failure, Docker compose config failure, missing README/run instructions, missing required endpoints, or browser JavaScript fetching an unreachable Docker service hostname such as http://backend:8000, treat it as an incomplete runtime blocker.
 - Browser JavaScript running on the host cannot fetch http://backend:8000. Use a host-reachable URL such as http://localhost:2226, a relative/proxy URL, or documented environment configuration.
 - Treat unverified acceptance criteria and unrun verification commands as incomplete.
 - Include exact verification commands and tell the agent to stop after the scoped task is verified.
-- Only emit YOLO_STOP when all original goals, explicit acceptance criteria, verification commands, and acceptance-gate checks are known to have passed and there are no known runtime failures or TODO blockers.
-- If acceptance gate results are missing, failed, or disabled, produce a focused next prompt instead of YOLO_STOP.
+- Only emit YOLO_STOP when all original goals, explicit acceptance criteria, verification commands, and any configured acceptance-gate checks are known to have passed and there are no known runtime failures or TODO blockers.
+- If configured acceptance gate results are missing or failed, produce a focused next prompt instead of YOLO_STOP.
 
 Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless the acceptance evidence proves the project is complete."#,
         original = iteration.original_user_prompt,
@@ -727,6 +743,10 @@ Your role is to inspect the latest round, identify the most impactful remaining 
         commands_count = iteration.commands_captured_count,
         files_count = iteration.files_changed_count,
         no_action_round = iteration.no_action_round,
+        duration_seconds = iteration.agent_round_duration_seconds,
+        round_timeout_secs = round_timeout_secs,
+        timeout_utilization_percent = timeout_utilization_percent,
+        round_duration_near_timeout = round_duration_near_timeout,
         status = tail(&iteration.current_git_status, 1_000),
         diff = tail(&iteration.git_diff_summary, 1_500),
         style = &iteration.round_budget.style,
@@ -736,6 +756,19 @@ Your role is to inspect the latest round, identify the most impactful remaining 
         max_prompt_chars = iteration.round_budget.max_next_prompt_chars,
     );
     redact_text(&limit_text(&summary, REFINER_SUMMARY_MAX_CHARS))
+}
+
+fn timeout_utilization_percent(duration_seconds: u64, round_timeout_secs: u64) -> u32 {
+    if round_timeout_secs == 0 {
+        return 0;
+    }
+    let percent = duration_seconds.saturating_mul(100) / round_timeout_secs;
+    percent.min(u32::MAX as u64) as u32
+}
+
+fn round_duration_near_timeout(duration_seconds: u64, round_timeout_secs: u64) -> bool {
+    round_timeout_secs > 0
+        && duration_seconds.saturating_mul(100) >= round_timeout_secs.saturating_mul(80)
 }
 
 fn agent_round_timeout_result(round_timeout_secs: u64) -> AgentRoundResult {
@@ -1064,7 +1097,7 @@ mod tests {
             round_timeout_secs: 600,
             round_budget: RoundBudget::default(),
             continue_after_timeout: false,
-            allow_refiner_stop: false,
+            allow_refiner_stop: true,
             verify_commands: Vec::new(),
             verify_timeout_secs: 15,
             acceptance_gate_enabled: false,
@@ -1318,6 +1351,28 @@ Stop after the scoped task is complete and verification is summarized."#
     }
 
     #[tokio::test]
+    async fn yolo_loop_rejects_zero_iteration_limit() {
+        let temp = TempDir::new().unwrap();
+        let err = run_yolo_loop(
+            loop_config(&temp, Some(0)),
+            |_| async { Ok(agent_result("session-1")) },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "unused".to_string(),
+                    next_prompt: "unused".to_string(),
+                })
+            },
+        )
+        .await
+        .expect_err("zero iteration limit should be invalid");
+
+        assert!(
+            err.to_string()
+                .contains("omit --iterations for infinite YOLO mode")
+        );
+    }
+
+    #[tokio::test]
     async fn yolo_next_prompt_validation_repairs_before_injection() {
         let temp = TempDir::new().unwrap();
 
@@ -1356,13 +1411,15 @@ Stop after the scoped task is complete and verification is summarized."#
     }
 
     #[tokio::test]
-    async fn yolo_loop_ignores_stop_signal_by_default_and_reaches_max_iterations() {
+    async fn yolo_loop_can_disable_stop_signal_and_reach_max_iterations() {
         let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(2));
+        config.allow_refiner_stop = false;
         let calls = Rc::new(RefCell::new(0_u32));
         let calls_for_agent = calls.clone();
 
         let outcome = run_yolo_loop(
-            loop_config(&temp, Some(2)),
+            config,
             move |_| {
                 let calls = calls_for_agent.clone();
                 async move {
@@ -1398,7 +1455,7 @@ Stop after the scoped task is complete and verification is summarized."#
     }
 
     #[tokio::test]
-    async fn yolo_loop_honors_max_iterations_when_refiner_attempts_to_stop() {
+    async fn yolo_loop_accepts_stop_signal_before_max_iterations() {
         let temp = TempDir::new().unwrap();
         let calls = Rc::new(RefCell::new(0_u32));
         let calls_for_agent = calls.clone();
@@ -1422,19 +1479,17 @@ Stop after the scoped task is complete and verification is summarized."#
         .await
         .unwrap();
 
-        assert_eq!(outcome.iterations_completed, 5);
-        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
-        assert_eq!(*calls.borrow(), 5);
+        assert_eq!(outcome.iterations_completed, 1);
+        assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+        assert_eq!(*calls.borrow(), 1);
     }
 
     #[tokio::test]
-    async fn yolo_loop_allows_refiner_stop_only_when_enabled() {
+    async fn yolo_loop_infinite_mode_stops_on_yolo_stop() {
         let temp = TempDir::new().unwrap();
-        let mut config = loop_config(&temp, Some(5));
-        config.allow_refiner_stop = true;
 
         let outcome = run_yolo_loop(
-            config,
+            loop_config(&temp, None),
             |_| async { Ok(agent_result("session-1")) },
             |_| async {
                 Ok(RefinerResponse {
@@ -1448,6 +1503,21 @@ Stop after the scoped task is complete and verification is summarized."#
 
         assert_eq!(outcome.iterations_completed, 1);
         assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+
+        let run_json = std::fs::read_to_string(outcome.run_dir.join("run.json")).unwrap();
+        let run_log = serde_json::from_str::<YoloRunLog>(&run_json).unwrap();
+        assert_eq!(run_log.iteration_limit, None);
+        assert_eq!(run_log.stop_reason, Some(YoloStopReason::RefinerStopSignal));
+
+        let analysis_json = std::fs::read_to_string(outcome.run_dir.join("analysis.json")).unwrap();
+        let analysis: serde_json::Value = serde_json::from_str(&analysis_json).unwrap();
+        assert_eq!(analysis["iterationLimit"], serde_json::Value::Null);
+        assert_eq!(analysis["finalStatus"], "success");
+
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert!(iteration_log.stop_signal_accepted);
     }
 
     #[tokio::test]
@@ -1880,7 +1950,7 @@ Stop after the scoped task is complete and verification is summarized."#
             stop_reason: None,
         };
 
-        let summary = build_refiner_summary(&iteration);
+        let summary = build_refiner_summary(&iteration, 600);
 
         assert!(summary.contains("[REDACTED]"));
         assert!(!summary.contains("sk_test_123456789abcdef"));
@@ -1937,7 +2007,7 @@ Stop after the scoped task is complete and verification is summarized."#
             stop_reason: None,
         };
 
-        let summary = build_refiner_summary(&iteration);
+        let summary = build_refiner_summary(&iteration, 600);
 
         assert!(summary.chars().count() <= REFINER_SUMMARY_MAX_CHARS);
         assert!(summary.contains("[truncated"));

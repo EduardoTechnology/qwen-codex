@@ -62,7 +62,7 @@ fn validate_next_prompt(prompt: &str, previous_prompt: &str, budget: &RoundBudge
         issues.push("next prompt lacks acceptance criteria or verification commands".to_string());
     }
     if is_yolo_stop_like(trimmed) {
-        issues.push("refiner attempted YOLO_STOP, which is disabled by default".to_string());
+        issues.push("refiner attempted YOLO_STOP where a next prompt is required".to_string());
     }
     if let Some(phrase) = broad_phrase(trimmed) {
         issues.push(format!("next prompt is too broad: {phrase}"));
@@ -224,7 +224,7 @@ fn focused_continue_prompt(budget: &RoundBudget) -> String {
 Verify and improve the most important remaining acceptance criterion.
 
 Context:
-The refiner attempted to stop, but YOLO is configured to exhaust the requested iterations. Continue by checking the latest round output and external verification results for the most important remaining blocker.
+The refiner attempted to stop, but this step requires a concrete next prompt. Continue by checking the latest round output and external verification results for the most important remaining blocker.
 
 Task:
 Fix one concrete blocker or missing acceptance criterion from the latest round. If external verification failed, target that failure first.
@@ -479,7 +479,7 @@ Verification commands:
     }
 
     #[test]
-    fn yolo_next_prompt_validation_repairs_stop_signal_by_default() {
+    fn yolo_next_prompt_validation_repairs_stop_signal_when_next_prompt_is_required() {
         let result = validate_and_repair_next_prompt("YOLO_STOP", "previous", &budget());
 
         assert!(result.passed);

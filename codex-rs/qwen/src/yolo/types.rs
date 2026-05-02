@@ -149,6 +149,7 @@ pub(crate) struct YoloRunLog {
     pub base_url: String,
     pub model: String,
     pub iteration_limit: Option<u32>,
+    pub round_timeout_secs: u64,
     pub round_budget: RoundBudget,
     pub continue_after_timeout: bool,
     pub allow_refiner_stop: bool,

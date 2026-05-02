@@ -44,7 +44,7 @@ QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS=3
 QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS=3000
 QWEN_CODEX_YOLO_REFINER_STYLE=incremental
 QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false
-QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false
+QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true
 QWEN_CODEX_YOLO_VERIFY_COMMANDS=
 QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS=15
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
@@ -97,22 +97,28 @@ For each iteration, Qwen Codex:
 5. Sends the round summary and external verification results to the configured refiner model via `/v1/chat/completions`.
 6. Uses the refiner response as the next prompt and resumes the same Codex thread.
 
-With `--iterations N`, the normal stop reason is `max_iterations` after exactly `N` completed rounds. The refiner cannot stop the run by default. If it returns `YOLO_STOP`, Qwen Codex treats that as an invalid next prompt and locally repairs it into a focused prompt that asks the agent to verify and improve the most important remaining acceptance criterion.
+Without `--iterations`, YOLO runs in infinite mode. It continues until an accepted `YOLO_STOP` signal or a safety stop.
 
-Without `--iterations`, or with `--iterations 0`, YOLO runs indefinitely until Ctrl+C, timeout, the failure guard, or a fatal agent/refiner error.
+With `--iterations N`, `-n N`, or the optional `--10` shorthand, YOLO runs at most `N` completed rounds. An accepted `YOLO_STOP` may stop earlier. Fixed-iteration runs still execute acceptance commands before a `max_iterations` stop when the acceptance gate is enabled, so failed acceptance checks produce `finalStatus: "partial"` rather than success.
+
+`--iterations 0`, `-n 0`, and `--0` are invalid. Omit the iteration flag for infinite mode.
 
 The first agent round receives a small YOLO-only execution note appended to the user's original prompt. That note tells the agent it is in round 1 of a multi-round autonomous run, should prefer a minimal runnable baseline, should respect the configured round budget where practical, and should stop after summarizing verification. Later rounds get the same scoping through the refiner-generated next prompt.
 
 The loop stops when:
 
+- The refiner emits `YOLO_STOP` and it is accepted.
 - The fixed iteration limit is reached.
 - A single agent round exceeds `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS`, which defaults to 600 seconds.
 - The normal Codex agent subprocess exits nonzero without an explicit YOLO interrupt.
 - The repeated-prompt guard triggers.
 - The consecutive-failure guard triggers.
 - Ctrl+C is received; the process stops cleanly between rounds.
+- The refiner/provider returns a fatal error.
+- The acceptance gate rejects `YOLO_STOP` and no valid repair prompt can be produced.
+- The delegated Codex process fails on context management or auto-compaction.
 
-Optional early stop by refiner is disabled by default and is discouraged for product-generation workflows. It can be enabled explicitly with `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true`; only then can `YOLO_STOP` produce `stopReason: "refiner_stop_signal"` without acceptance gating.
+Refiner stop is enabled by default with `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true`. Set it to `false` only when a bounded run must ignore `YOLO_STOP` and continue to the configured iteration limit. When disabled, a stop-like refiner response is treated as an invalid next prompt and repaired into a focused continuation prompt.
 
 For product-generation workflows, prefer the acceptance gate instead of unconditional early stop. With `--yolo-acceptance-gate` or `QWEN_CODEX_YOLO_ACCEPTANCE_GATE=true`, a refiner `YOLO_STOP` is accepted only after the configured acceptance commands pass. If any command fails, YOLO records `stopSignalReceived=true`, `stopSignalRejected=true`, writes `acceptanceResults`, asks the refiner for a bounded repair prompt using the failed command output, and continues if the iteration and failure guards allow it.
 
@@ -187,6 +193,8 @@ Acceptance commands run when the refiner emits `YOLO_STOP`, and fixed-iteration 
 
 Docker builds can be slow. The default round timeout remains 600 seconds for general use; for Docker-heavy YOLO runs, pass `--yolo-round-timeout-secs 1200` so one build/fix round has enough time to hand control back cleanly.
 
+For Docker projects, the refiner is instructed to prefer `docker compose config` before build, run `docker compose build` only when necessary, use `docker compose up -d` instead of foreground `up`, wrap long commands with `timeout` where appropriate, and always run `docker compose down` after runtime checks. Avoid asking for broad feature implementation and heavy Docker verification in the same round. If a round uses more than 80% of its timeout, `analysis.json` records `roundDurationNearTimeout=true` and the next refiner context asks for a smaller prompt.
+
 ## Logging
 
 Each run creates a directory under:
@@ -239,13 +247,13 @@ Secrets are redacted before logs are written. The redactor covers common API key
 
 JSON logs are redacted field-by-field before serialization, so raw newlines, ANSI escape sequences, interrupted output, and secret-like `.env` assignments remain valid JSON. Markdown logs are for human review only.
 
-`analysis.json` is a compact whole-run summary designed for automation. It includes completed iteration count, final status, per-round previews, refiner call status, acceptance-gate results, action/tool diagnostics, round-chaining checks, important project artifacts, secret-redaction checks, and diagnostics grouped as timeouts, interruptions, agent errors, provider errors, and refiner errors. `analysis.md` is the same review in a concise human-readable form.
+`analysis.json` is a compact whole-run summary designed for automation. It includes completed iteration count, final status, per-round previews, refiner call status, acceptance-gate results, timeout utilization fields (`timeoutUtilizationPercent` and `roundDurationNearTimeout`), action/tool diagnostics, round-chaining checks, important project artifacts, secret-redaction checks, and diagnostics grouped as timeouts, interruptions, agent errors, provider errors, and refiner errors. `analysis.md` is the same review in a concise human-readable form.
 
 The refiner receives bounded context derived from the latest iteration summary, changed files, errors, git status, and diff summary. Qwen Codex avoids passing full raw logs or large shell heredocs into the refiner request.
 
 ## Refiner Prompt
 
-The default refiner system prompt asks the model to act as a senior product and engineering iteration planner. It instructs the refiner to produce only the next concrete coding-agent prompt, avoid repeating completed work, prefer one small verifiable step, fix build/runtime blockers before adding scope, include acceptance criteria and exact verification commands, and stop the agent after the scoped task. It may emit `YOLO_STOP` only when acceptance evidence proves the original goal and runtime checks are complete; otherwise it must return a focused next prompt.
+The default refiner system prompt asks the model to act as a senior product and engineering iteration planner. It instructs the refiner to produce only the next concrete coding-agent prompt, avoid repeating completed work, prefer one small verifiable step, fix build/runtime blockers before adding scope, include acceptance criteria and exact verification commands, and stop the agent after the scoped task. It may emit `YOLO_STOP` only when the original goal, verification commands, and any configured acceptance-gate checks are complete; otherwise it must return a focused next prompt.
 
 ## Architecture Notes
 
@@ -271,6 +279,6 @@ threshold = min(context_window * 0.80, context_window - 4096)
 
 For the verified 32768-token model server, the threshold is `26214` tokens.
 
-This threshold is passed to upstream Codex as `model_auto_compact_token_limit`, while `model_context_window` is passed as `32768`. Long or unlimited YOLO runs depend on this propagation so upstream compaction starts before vLLM reaches the hard context limit.
+This threshold is passed to upstream Codex as `model_auto_compact_token_limit`, while `model_context_window` is passed as `32768`. Long or infinite YOLO runs depend on this propagation so upstream compaction starts before vLLM reaches the hard context limit.
 
-Status: config propagation is confirmed and covered by tests, but long-running YOLO compaction has not yet been stress-tested.
+Status: config propagation is confirmed and covered by tests. A 10-round YOLO stress run completed without provider/context errors, but it stayed below the threshold needed to prove an actual auto-compaction event.

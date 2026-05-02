@@ -336,6 +336,12 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
         index += 1;
     }
 
+    if yolo && overrides.iterations == Some(0) {
+        anyhow::bail!(
+            "--iterations must be greater than 0; omit --iterations for infinite YOLO mode"
+        );
+    }
+
     let command = if health {
         QwenCommand::Health
     } else if yolo {
@@ -618,6 +624,38 @@ mod tests {
                 dangerously_bypass_approvals_and_sandbox: false,
             }
         );
+    }
+
+    #[test]
+    fn yolo_without_iterations_leaves_limit_unset() {
+        let parsed =
+            parse_qwen_args(vec!["--yolo".to_string(), "Improve docs".to_string()]).unwrap();
+
+        assert_eq!(parsed.overrides.iterations, None);
+        assert_eq!(
+            parsed.command,
+            QwenCommand::Yolo {
+                prompt_parts: vec!["Improve docs".to_string()],
+                dangerously_bypass_approvals_and_sandbox: false,
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_zero_yolo_iterations() {
+        for args in [
+            vec!["--yolo", "--iterations", "0", "Improve docs"],
+            vec!["--yolo", "-n", "0", "Improve docs"],
+            vec!["--yolo", "--0", "Improve docs"],
+        ] {
+            let err = parse_qwen_args(args.into_iter().map(str::to_string).collect())
+                .expect_err("zero iteration limit should be invalid");
+
+            assert!(
+                err.to_string()
+                    .contains("omit --iterations for infinite YOLO mode")
+            );
+        }
     }
 
     #[test]
