@@ -111,6 +111,18 @@ fn run_markdown(run: &YoloRunLog) -> String {
     out.push_str(&format!("- Model: `{}`\n", run.model));
     out.push_str(&format!("- Base URL: `{}`\n", run.base_url));
     out.push_str(&format!("- Iteration limit: `{:?}`\n", run.iteration_limit));
+    out.push_str(&format!(
+        "- Round budget: `{} files / {} actions / {} tests / {} chars / {}`\n",
+        run.round_budget.max_files,
+        run.round_budget.max_actions,
+        run.round_budget.max_tests,
+        run.round_budget.max_next_prompt_chars,
+        run.round_budget.style
+    ));
+    out.push_str(&format!(
+        "- Continue after timeout: `{}`\n",
+        run.continue_after_timeout
+    ));
     out.push_str(&format!("- Stop reason: `{:?}`\n\n", run.stop_reason));
     out.push_str("## Original Prompt\n\n");
     out.push_str(&run.original_prompt);
@@ -135,6 +147,20 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
     out.push_str(&format!("- Timestamp: `{}`\n", iteration.timestamp));
     out.push_str(&format!("- Session ID: `{:?}`\n", iteration.session_id));
     out.push_str(&format!("- Stop reason: `{:?}`\n\n", iteration.stop_reason));
+    out.push_str(&format!(
+        "- Round budget: `{} files / {} actions / {} tests / {} chars / {}`\n",
+        iteration.round_budget.max_files,
+        iteration.round_budget.max_actions,
+        iteration.round_budget.max_tests,
+        iteration.round_budget.max_next_prompt_chars,
+        iteration.round_budget.style
+    ));
+    out.push_str(&format!(
+        "- Next prompt validation: `{:?}` repaired=`{}` issues=`{}`\n\n",
+        iteration.next_prompt_validation_passed,
+        iteration.next_prompt_repaired,
+        iteration.next_prompt_validation_issues.len()
+    ));
     section(
         &mut out,
         "Current Agent Input",
@@ -165,6 +191,11 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
     if let Some(prompt) = &iteration.next_prompt_injected_into_agent {
         section(&mut out, "Next Prompt Injected", prompt);
     }
+    list_section(
+        &mut out,
+        "Next Prompt Validation Issues",
+        &iteration.next_prompt_validation_issues,
+    );
     out
 }
 
@@ -192,6 +223,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::yolo::types::RoundBudget;
     use crate::yolo::types::YoloStopReason;
 
     #[tokio::test]
@@ -224,6 +256,10 @@ mod tests {
             refiner_raw_response: None,
             refiner_error: None,
             next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
             stop_reason: Some(YoloStopReason::RefinerStopSignal),
         };
 
@@ -272,6 +308,10 @@ mod tests {
             refiner_raw_response: None,
             refiner_error: None,
             next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
             stop_reason: Some(YoloStopReason::Interrupted),
         };
 

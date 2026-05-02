@@ -31,6 +31,7 @@ use crate::yolo::types::AgentRoundResult;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
 use crate::yolo::types::RefinerSkippedReason;
+use crate::yolo::types::RoundBudget;
 use crate::yolo::types::YoloIterationLog;
 use crate::yolo::types::YoloLoopConfig;
 use crate::yolo::types::YoloRunLog;
@@ -40,6 +41,7 @@ use crate::yolo::types::YoloStopReason;
 mod agent;
 mod analysis;
 mod logging;
+mod prompt_validation;
 mod refiner;
 mod types;
 
@@ -74,6 +76,14 @@ pub async fn run_yolo_mode(
         iteration_limit: config.yolo.default_iterations,
         log_root: config.yolo.log_dir.clone(),
         round_timeout_secs: config.yolo.round_timeout_secs,
+        round_budget: RoundBudget {
+            max_files: config.yolo.round_budget.max_files,
+            max_actions: config.yolo.round_budget.max_actions,
+            max_tests: config.yolo.round_budget.max_tests,
+            max_next_prompt_chars: config.yolo.round_budget.max_next_prompt_chars,
+            style: config.yolo.round_budget.style.clone(),
+        },
+        continue_after_timeout: config.yolo.continue_after_timeout,
         max_repeated_prompts: config.yolo.max_repeated_prompts,
         max_failures: config.yolo.max_failures,
         base_url: config.base_url.clone(),
@@ -124,6 +134,8 @@ where
         base_url: config.base_url.clone(),
         model: config.model.clone(),
         iteration_limit: config.iteration_limit,
+        round_budget: config.round_budget.clone(),
+        continue_after_timeout: config.continue_after_timeout,
         max_repeated_prompts: config.max_repeated_prompts,
         max_failures: config.max_failures,
         session_id: None,
@@ -259,10 +271,14 @@ where
             refiner_raw_response: None,
             refiner_error: None,
             next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: config.round_budget.clone(),
             stop_reason: None,
         };
 
-        if agent_result.timed_out {
+        if agent_result.timed_out && !config.continue_after_timeout {
             iteration_log.stop_reason = Some(YoloStopReason::RoundTimeout);
             iteration_log.refiner_skipped_reason = Some(RefinerSkippedReason::Timeout);
             iterations_completed = iteration;
@@ -398,6 +414,33 @@ where
             break;
         }
 
+        let validated_prompt = prompt_validation::validate_and_repair_next_prompt(
+            &next_prompt,
+            &current_prompt,
+            &config.round_budget,
+        );
+        iteration_log.next_prompt_validation_passed = Some(validated_prompt.passed);
+        iteration_log.next_prompt_validation_issues = validated_prompt.issues.clone();
+        iteration_log.next_prompt_repaired = validated_prompt.repaired;
+        if !validated_prompt.passed {
+            iteration_log.errors.push(format!(
+                "refiner produced an invalid next prompt: {}",
+                validated_prompt.issues.join("; ")
+            ));
+            iteration_log.stop_reason = Some(YoloStopReason::RefinerError);
+            iterations_completed = iteration;
+            write_iteration(&logger, &mut run_log, iteration_log).await?;
+            finish_run(
+                &logger,
+                &mut run_log,
+                iterations_completed,
+                YoloStopReason::RefinerError,
+            )
+            .await?;
+            break;
+        }
+        let next_prompt = validated_prompt.prompt;
+
         let normalized_prompt = normalize_prompt_for_guard(&next_prompt);
         if last_refiner_prompt.as_deref() == Some(normalized_prompt.as_str()) {
             repeated_prompt_count = repeated_prompt_count.saturating_add(1);
@@ -493,7 +536,21 @@ Current git status:
 Git diff summary:
 {diff}
 
-Produce the next concrete prompt for the coding agent, or output YOLO_STOP."#,
+Round budget:
+- style: {style}
+- modify at most {max_files} files
+- aim for at most {max_actions} concrete actions
+- run at most {max_tests} verification commands
+- next prompt must be at most {max_prompt_chars} characters
+
+Next prompt contract:
+- Use sections: Title, Context, Task, Constraints, Acceptance criteria, Verification commands, Stop condition.
+- Choose one highest-impact next step that fits this budget.
+- Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
+- Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
+- Include exact verification commands and tell the agent to stop after the scoped task is verified.
+
+Produce the next bounded prompt for the coding agent, or output YOLO_STOP."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
         summary = tail(
@@ -520,6 +577,11 @@ Produce the next concrete prompt for the coding agent, or output YOLO_STOP."#,
         ),
         status = tail(&iteration.current_git_status, 1_000),
         diff = tail(&iteration.git_diff_summary, 1_500),
+        style = &iteration.round_budget.style,
+        max_files = iteration.round_budget.max_files,
+        max_actions = iteration.round_budget.max_actions,
+        max_tests = iteration.round_budget.max_tests,
+        max_prompt_chars = iteration.round_budget.max_next_prompt_chars,
     );
     redact_text(&limit_text(&summary, REFINER_SUMMARY_MAX_CHARS))
 }
@@ -634,6 +696,8 @@ mod tests {
             iteration_limit,
             log_root: temp.path().join("logs"),
             round_timeout_secs: 600,
+            round_budget: RoundBudget::default(),
+            continue_after_timeout: false,
             max_repeated_prompts: 3,
             max_failures: 3,
             base_url: "http://127.0.0.1:8002/v1".to_string(),
@@ -652,7 +716,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn yolo_loop_guard_round_timeout_stops_cleanly_without_refiner() {
+    async fn yolo_timeout_stops_cleanly_without_refiner() {
         let temp = TempDir::new().unwrap();
         let mut config = loop_config(&temp, None);
         config.round_timeout_secs = 0;
@@ -842,6 +906,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn yolo_next_prompt_validation_repairs_before_injection() {
+        let temp = TempDir::new().unwrap();
+
+        let outcome = run_yolo_loop(
+            loop_config(&temp, Some(2)),
+            |_| async { Ok(agent_result("session-1")) },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "broad".to_string(),
+                    next_prompt: "Please finish the entire project and do everything.".to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(iteration_log.next_prompt_validation_passed, Some(true));
+        assert!(iteration_log.next_prompt_repaired);
+        assert!(
+            iteration_log
+                .next_prompt_validation_issues
+                .iter()
+                .any(|issue| issue.contains("too broad"))
+        );
+        assert!(
+            iteration_log
+                .next_prompt_injected_into_agent
+                .as_deref()
+                .unwrap()
+                .contains("Acceptance criteria:")
+        );
+    }
+
+    #[tokio::test]
     async fn yolo_loop_guard_exact_stop_signal_stops_loop() {
         let temp = TempDir::new().unwrap();
 
@@ -989,6 +1091,10 @@ mod tests {
             refiner_raw_response: None,
             refiner_error: None,
             next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
             stop_reason: None,
         };
 
@@ -1027,6 +1133,10 @@ mod tests {
             refiner_raw_response: None,
             refiner_error: None,
             next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
             stop_reason: None,
         };
 

@@ -270,6 +270,77 @@ UX conclusion:
 - The fourth round showed that realistic product tasks can still run too long for one agent round. The timeout now prevents indefinite hangs and produces valid logs, but the generated ecommerce project is not release-ready.
 - The next product/UX improvement should reduce per-round task scope or add a progress/round-budget strategy so the refiner can split large implementation prompts before a 20-minute round timeout.
 
+## YOLO Bounded Ecommerce Rerun
+
+Command used:
+
+```text
+qwen-codex --yolo-refiner --iterations 5 --yolo-round-timeout-secs 1200 --dangerously-bypass-approvals-and-sandbox "<incremental Dockerized ecommerce prompt>"
+```
+
+Budget environment:
+
+```text
+QWEN_CODEX_YOLO_ROUND_GOAL_MAX_FILES=8
+QWEN_CODEX_YOLO_ROUND_GOAL_MAX_ACTIONS=5
+QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS=3
+QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS=3000
+QWEN_CODEX_YOLO_REFINER_STYLE=incremental
+```
+
+Run paths:
+
+- Workspace: `/tmp/qwen-yolo-ecommerce`
+- Logs: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260502T022211Z-2083254`
+- Analysis JSON: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260502T022211Z-2083254/analysis.json`
+- Analysis Markdown: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260502T022211Z-2083254/analysis.md`
+
+Result:
+
+- Completed all 5 requested rounds: `NO`; the refiner returned `YOLO_STOP` after 3 completed iterations.
+- Stop reason: `refiner_stop_signal`.
+- Final infrastructure status: `success`.
+- Completed iterations logged: `3`.
+- Timeouts: `0`.
+- Agent errors: `0`.
+- Refiner errors: `0`.
+- Round chaining: `PASS`; rounds 2 and 3 inputs matched the previous iteration `nextPrompt`.
+- Secret redaction: `PASS`; neither `local-dev-key` nor `authorization:` appeared in logs.
+- JSON validation: `run.json`, `analysis.json`, and all `iteration-*.json` files parsed with `python3 -m json.tool`.
+- Prompt validation fields: present. Rounds 1 and 2 had `nextPromptValidationPassed=true`, `nextPromptRepaired=false`, and no validation issues. Round 3 returned `YOLO_STOP`, so no next prompt was injected.
+
+Round review:
+
+| Round | Agent result | Refiner called? | Refiner next prompt summary | Duration | Prompt validation | Coherent improvement? |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Created a smaller baseline with root README, compose, backend, frontend, and Mongo service definitions. | Yes | Asked to verify the Docker Compose stack and API responses before adding scope. | 574s | Passed | Yes. This was more bounded than the previous broad frontend prompt. |
+| 2 | Started the compose stack and performed verification work. | Yes | Asked to implement backend API logic and frontend fetch logic with a limited file set. | 359s | Passed | Mostly. It was actionable, but assumed some file names and did not catch the frontend runtime issue. |
+| 3 | Updated backend/frontend code and verification artifacts. | Yes | Returned `YOLO_STOP`. | 348s | Not applicable | Partial. Infrastructure stopped cleanly, but the generated frontend still failed at runtime. |
+
+Project verification:
+
+- `README.md`: present.
+- `docker-compose.yml`: present.
+- `backend/`: present.
+- `frontend/`: present.
+- Services in `docker compose config`: backend, frontend, and mongo are all active.
+- Host ports: frontend `2225`, backend `2226`, mongo `2227`.
+- Forbidden host ports: none found in compose.
+- `docker compose config`: `PASS`, with only the Docker Compose obsolete `version` warning.
+- `docker compose build`: `PASS`.
+- `docker compose ps`: all three containers were running during verification.
+- Backend runtime: `PASS`; `GET http://localhost:2226/health` returned `{"status":"ok"}`, and `GET /api/products` returned a product JSON array.
+- Frontend runtime: `FAIL`; `GET http://localhost:2225` returned HTTP 500 because Express called `res.send(indexHtml)` instead of rendering the HTML string. Browser-side `frontend/index.html` also hardcodes `http://backend:8000`, which is not a browser-reachable host URL.
+- Cleanup: `docker compose down` was run after verification to free ports.
+
+UX conclusion:
+
+- The round-budget and prompt-validation strategy fixed the previous broad-prompt timeout for this rerun. The run stopped cleanly before the timeout and logs remained valid.
+- Refiner prompts were smaller, structured, and contained acceptance criteria and verification commands.
+- The generated project is more runnable than the previous attempt because compose config/build pass and backend endpoints work.
+- The generated app is not complete production-quality because the frontend route fails at runtime and the refiner stopped too early.
+- Next recommended improvement: feed post-run verification failures back into a follow-up YOLO prompt or add optional objective-specific acceptance checks so the refiner does not return `YOLO_STOP` while external runtime checks still fail.
+
 ## Context Management
 
 Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.

@@ -172,6 +172,13 @@ YOLO OPTIONS:
     --refiner-model <MODEL>       Refiner model name
     --yolo-log-dir <DIR>          YOLO run log directory
     --yolo-round-timeout-secs <N> Per-agent-round timeout; default is 600 seconds
+    --yolo-round-max-files <N>    Refiner budget for files per next prompt
+    --yolo-round-max-actions <N>  Refiner budget for actions per next prompt
+    --yolo-round-max-tests <N>    Refiner budget for verification commands per next prompt
+    --yolo-next-prompt-max-chars <N>
+                                  Maximum accepted refiner next-prompt length
+    --yolo-refiner-style <STYLE>  Refiner planning style; default is incremental
+    --yolo-continue-after-timeout Continue with a smaller retry prompt after timeout; default false
     --max-repeated-prompts <N>    Repeated prompt guard
     --max-failures <N>            Repeated failure guard
     --dangerously-bypass-approvals-and-sandbox
@@ -185,6 +192,12 @@ ENVIRONMENT:
     QWEN_CODEX_REQUEST_TIMEOUT_MS default: {timeout_ms}
     QWEN_CODEX_LOG_LEVEL          default: {log_level}
     QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS default: {round_timeout_secs}
+    QWEN_CODEX_YOLO_ROUND_GOAL_MAX_FILES default: {round_max_files}
+    QWEN_CODEX_YOLO_ROUND_GOAL_MAX_ACTIONS default: {round_max_actions}
+    QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS default: {round_max_tests}
+    QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS default: {next_prompt_max_chars}
+    QWEN_CODEX_YOLO_REFINER_STYLE default: {refiner_style}
+    QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT default: {continue_after_timeout}
 
     A local .env file in the current directory is loaded for QWEN_CODEX_* and supported alias variables.
     Precedence is CLI flags, QWEN_CODEX_* environment, short aliases, documented defaults.
@@ -203,7 +216,13 @@ EXAMPLES:
         context_window = config.context_window,
         timeout_ms = config.request_timeout_ms,
         log_level = config.log_level,
-        round_timeout_secs = config.yolo.round_timeout_secs
+        round_timeout_secs = config.yolo.round_timeout_secs,
+        round_max_files = config.yolo.round_budget.max_files,
+        round_max_actions = config.yolo.round_budget.max_actions,
+        round_max_tests = config.yolo.round_budget.max_tests,
+        next_prompt_max_chars = config.yolo.round_budget.max_next_prompt_chars,
+        refiner_style = &config.yolo.round_budget.style,
+        continue_after_timeout = config.yolo.continue_after_timeout
     );
 }
 

@@ -11,11 +11,35 @@ pub(crate) struct YoloLoopConfig {
     pub iteration_limit: Option<u32>,
     pub log_root: PathBuf,
     pub round_timeout_secs: u64,
+    pub round_budget: RoundBudget,
+    pub continue_after_timeout: bool,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
     pub base_url: String,
     pub model: String,
     pub interrupt_flag: Option<Arc<AtomicBool>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RoundBudget {
+    pub max_files: u32,
+    pub max_actions: u32,
+    pub max_tests: u32,
+    pub max_next_prompt_chars: u32,
+    pub style: String,
+}
+
+impl Default for RoundBudget {
+    fn default() -> Self {
+        Self {
+            max_files: 8,
+            max_actions: 5,
+            max_tests: 3,
+            max_next_prompt_chars: 3_000,
+            style: "incremental".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -108,6 +132,8 @@ pub(crate) struct YoloRunLog {
     pub base_url: String,
     pub model: String,
     pub iteration_limit: Option<u32>,
+    pub round_budget: RoundBudget,
+    pub continue_after_timeout: bool,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
     pub session_id: Option<String>,
@@ -148,5 +174,9 @@ pub(crate) struct YoloIterationLog {
     pub refiner_error: Option<RefinerFailureDiagnostic>,
     #[serde(rename = "nextPrompt")]
     pub next_prompt_injected_into_agent: Option<String>,
+    pub next_prompt_validation_passed: Option<bool>,
+    pub next_prompt_validation_issues: Vec<String>,
+    pub next_prompt_repaired: bool,
+    pub round_budget: RoundBudget,
     pub stop_reason: Option<YoloStopReason>,
 }

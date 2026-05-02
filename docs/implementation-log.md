@@ -89,3 +89,12 @@
 - Result: the run did not complete all five rounds. Rounds 1-3 completed normally, called the refiner, and chained correctly. Round 4 timed out at 1200 seconds, skipped the refiner, and stopped cleanly with valid logs. The generated project is partial: it has backend/frontend/compose files but no root README, `docker compose config` only activates backend due generated profile issues, and `docker compose build` fails because `seed-data.js` is missing.
 - Commit hash: `14d97aa82eaa0241a05e8ea7fb435c30b5c857af`.
 - Next step: push the verification documentation, then decide whether to add a YOLO round-budget/progress strategy before another ecommerce rerun.
+
+## 2026-05-02T02:46:07Z
+
+- Objective: add YOLO round-budget/progress strategy and rerun the ecommerce UX test with bounded prompts.
+- Files changed summary: added YOLO round-budget env/CLI config, structured refiner prompt guidance, next-prompt validation and local repair, validation/budget fields in iteration and analysis logs, timeout continuation config defaulting to safe stop behavior, README/YOLO docs, and verification/roadmap updates.
+- Tests run: `cargo test -p codex-qwen yolo_round_budget -- --nocapture`; `cargo test -p codex-qwen yolo_next_prompt_validation -- --nocapture`; `cargo test -p codex-qwen yolo_timeout -- --nocapture`; `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo -- --nocapture`; `cargo build -p codex-cli`; local `/v1/models` health check; live bounded ecommerce YOLO run in `/tmp/qwen-yolo-ecommerce`; `python3 -m json.tool` for `run.json`, `analysis.json`, and all iteration JSON logs; round-chaining assertion; secret grep; project structure checks; `docker compose config`; `docker compose build`; backend/frontend runtime curls; `docker compose down`.
+- Result: focused tests passed and the native CLI built. The bounded ecommerce rerun did not time out: it completed 3 iterations and stopped cleanly on `YOLO_STOP` with valid logs, no secret leaks, and correct round chaining. Refiner prompts were smaller and passed validation. The generated project is improved but still partial: compose config/build pass and backend runtime checks pass, but the frontend returns HTTP 500 because generated Express code sends the `indexHtml` function instead of rendered HTML.
+- Commit hash: `PENDING`.
+- Next step: commit and push the round-budget implementation and verification docs, then consider feeding external verification failures back into follow-up YOLO refinement before accepting `YOLO_STOP`.

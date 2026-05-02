@@ -20,6 +20,12 @@ pub struct QwenCliOverrides {
     pub yolo_round_timeout_secs: Option<u64>,
     pub yolo_max_repeated_prompts: Option<u32>,
     pub yolo_max_failures: Option<u32>,
+    pub yolo_round_goal_max_files: Option<u32>,
+    pub yolo_round_goal_max_actions: Option<u32>,
+    pub yolo_round_goal_max_tests: Option<u32>,
+    pub yolo_refiner_max_prompt_chars: Option<u32>,
+    pub yolo_refiner_style: Option<String>,
+    pub yolo_continue_after_timeout: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +186,13 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
                 "--yolo-log-dir",
                 &mut overrides.yolo_log_dir,
             )?
+            || consume_string_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-refiner-style",
+                &mut overrides.yolo_refiner_style,
+            )?
         {
             continue;
         }
@@ -225,6 +238,34 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
                 "--max-failures",
                 &mut overrides.yolo_max_failures,
             )?
+            || consume_u32_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-round-max-files",
+                &mut overrides.yolo_round_goal_max_files,
+            )?
+            || consume_u32_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-round-max-actions",
+                &mut overrides.yolo_round_goal_max_actions,
+            )?
+            || consume_u32_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-round-max-tests",
+                &mut overrides.yolo_round_goal_max_tests,
+            )?
+            || consume_u32_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-next-prompt-max-chars",
+                &mut overrides.yolo_refiner_max_prompt_chars,
+            )?
         {
             continue;
         }
@@ -233,6 +274,11 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--auto-tool-choice",
             &mut overrides.auto_tool_choice,
+        )? || consume_bool_flag(
+            &mut index,
+            arg,
+            "--yolo-continue-after-timeout",
+            &mut overrides.yolo_continue_after_timeout,
         )? {
             continue;
         }
@@ -524,6 +570,35 @@ mod tests {
         .unwrap();
 
         assert_eq!(parsed.overrides.yolo_round_timeout_secs, Some(30));
+    }
+
+    #[test]
+    fn parses_yolo_round_budget_flags() {
+        let parsed = parse_qwen_args(vec![
+            "--yolo-refiner".to_string(),
+            "--yolo-round-max-files".to_string(),
+            "6".to_string(),
+            "--yolo-round-max-actions=4".to_string(),
+            "--yolo-round-max-tests".to_string(),
+            "2".to_string(),
+            "--yolo-next-prompt-max-chars".to_string(),
+            "1800".to_string(),
+            "--yolo-refiner-style".to_string(),
+            "incremental".to_string(),
+            "--yolo-continue-after-timeout=true".to_string(),
+            "Improve".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(parsed.overrides.yolo_round_goal_max_files, Some(6));
+        assert_eq!(parsed.overrides.yolo_round_goal_max_actions, Some(4));
+        assert_eq!(parsed.overrides.yolo_round_goal_max_tests, Some(2));
+        assert_eq!(parsed.overrides.yolo_refiner_max_prompt_chars, Some(1800));
+        assert_eq!(
+            parsed.overrides.yolo_refiner_style,
+            Some("incremental".to_string())
+        );
+        assert_eq!(parsed.overrides.yolo_continue_after_timeout, Some(true));
     }
 
     #[test]

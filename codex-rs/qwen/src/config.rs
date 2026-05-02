@@ -20,6 +20,12 @@ pub const DEFAULT_YOLO_LOG_DIR: &str = ".qwen-codex/yolo-runs";
 pub const DEFAULT_YOLO_ROUND_TIMEOUT_SECS: u64 = 600;
 pub const DEFAULT_YOLO_MAX_REPEATED_PROMPTS: u32 = 3;
 pub const DEFAULT_YOLO_MAX_FAILURES: u32 = 3;
+pub const DEFAULT_YOLO_ROUND_GOAL_MAX_FILES: u32 = 8;
+pub const DEFAULT_YOLO_ROUND_GOAL_MAX_ACTIONS: u32 = 5;
+pub const DEFAULT_YOLO_ROUND_GOAL_MAX_TESTS: u32 = 3;
+pub const DEFAULT_YOLO_REFINER_MAX_PROMPT_CHARS: u32 = 3_000;
+pub const DEFAULT_YOLO_REFINER_STYLE: &str = "incremental";
+pub const DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT: bool = false;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedQwenConfig {
@@ -46,6 +52,17 @@ pub struct ResolvedYoloConfig {
     pub round_timeout_secs: u64,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
+    pub round_budget: ResolvedYoloRoundBudget,
+    pub continue_after_timeout: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedYoloRoundBudget {
+    pub max_files: u32,
+    pub max_actions: u32,
+    pub max_tests: u32,
+    pub max_next_prompt_chars: u32,
+    pub style: String,
 }
 
 pub trait EnvSource {
@@ -192,6 +209,50 @@ impl ResolvedQwenConfig {
             None,
             DEFAULT_YOLO_MAX_FAILURES,
         )?;
+        let round_budget = ResolvedYoloRoundBudget {
+            max_files: resolve_u32(
+                overrides.yolo_round_goal_max_files,
+                env,
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_FILES",
+                None,
+                DEFAULT_YOLO_ROUND_GOAL_MAX_FILES,
+            )?,
+            max_actions: resolve_u32(
+                overrides.yolo_round_goal_max_actions,
+                env,
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_ACTIONS",
+                None,
+                DEFAULT_YOLO_ROUND_GOAL_MAX_ACTIONS,
+            )?,
+            max_tests: resolve_u32(
+                overrides.yolo_round_goal_max_tests,
+                env,
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS",
+                None,
+                DEFAULT_YOLO_ROUND_GOAL_MAX_TESTS,
+            )?,
+            max_next_prompt_chars: resolve_u32(
+                overrides.yolo_refiner_max_prompt_chars,
+                env,
+                "QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS",
+                None,
+                DEFAULT_YOLO_REFINER_MAX_PROMPT_CHARS,
+            )?,
+            style: resolve_string(
+                overrides.yolo_refiner_style.clone(),
+                env,
+                "QWEN_CODEX_YOLO_REFINER_STYLE",
+                None,
+                DEFAULT_YOLO_REFINER_STYLE,
+            ),
+        };
+        let continue_after_timeout = resolve_bool(
+            overrides.yolo_continue_after_timeout,
+            env,
+            "QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT",
+            None,
+            DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT,
+        )?;
 
         Ok(Self {
             base_url,
@@ -213,6 +274,8 @@ impl ResolvedQwenConfig {
                 round_timeout_secs,
                 max_repeated_prompts,
                 max_failures,
+                round_budget,
+                continue_after_timeout,
             },
         })
     }
@@ -517,8 +580,70 @@ mod tests {
                 round_timeout_secs: 42,
                 max_repeated_prompts: 4,
                 max_failures: 2,
+                round_budget: ResolvedYoloRoundBudget {
+                    max_files: DEFAULT_YOLO_ROUND_GOAL_MAX_FILES,
+                    max_actions: DEFAULT_YOLO_ROUND_GOAL_MAX_ACTIONS,
+                    max_tests: DEFAULT_YOLO_ROUND_GOAL_MAX_TESTS,
+                    max_next_prompt_chars: DEFAULT_YOLO_REFINER_MAX_PROMPT_CHARS,
+                    style: DEFAULT_YOLO_REFINER_STYLE.to_string(),
+                },
+                continue_after_timeout: DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT,
             }
         );
+    }
+
+    #[test]
+    fn resolves_yolo_round_budget_config() {
+        let env = HashMap::from([
+            (
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_FILES".to_string(),
+                "6".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_ACTIONS".to_string(),
+                "4".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS".to_string(),
+                "2".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS".to_string(),
+                "1800".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REFINER_STYLE".to_string(),
+                "incremental".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT".to_string(),
+                "true".to_string(),
+            ),
+        ]);
+
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+
+        assert_eq!(
+            config.yolo.round_budget,
+            ResolvedYoloRoundBudget {
+                max_files: 6,
+                max_actions: 4,
+                max_tests: 2,
+                max_next_prompt_chars: 1800,
+                style: "incremental".to_string(),
+            }
+        );
+        assert!(config.yolo.continue_after_timeout);
+    }
+
+    #[test]
+    fn yolo_timeout_continue_is_disabled_by_default() {
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &HashMap::new())
+                .unwrap();
+
+        assert!(!config.yolo.continue_after_timeout);
     }
 
     #[test]

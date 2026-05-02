@@ -7,6 +7,7 @@ use serde::Serialize;
 
 use crate::yolo::agent::tail;
 use crate::yolo::types::RefinerSkippedReason;
+use crate::yolo::types::RoundBudget;
 use crate::yolo::types::YoloRunLog;
 use crate::yolo::types::YoloStopReason;
 
@@ -22,6 +23,8 @@ pub(crate) struct YoloRunAnalysis {
     pub model: String,
     pub base_url: String,
     pub iteration_limit: Option<u32>,
+    pub round_budget: RoundBudget,
+    pub continue_after_timeout: bool,
     pub completed_iterations: usize,
     pub stop_reason: Option<YoloStopReason>,
     pub final_status: String,
@@ -51,6 +54,10 @@ pub(crate) struct YoloRoundAnalysis {
     pub agent_process_exit_code: Option<i32>,
     pub agent_finished_normally: bool,
     pub refiner_skipped_reason: Option<String>,
+    pub next_prompt_validation_passed: Option<bool>,
+    pub next_prompt_validation_issues: Vec<String>,
+    pub next_prompt_repaired: bool,
+    pub round_budget: RoundBudget,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +131,10 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
                     .refiner_skipped_reason
                     .as_ref()
                     .map(refiner_skipped_reason_name),
+                next_prompt_validation_passed: iteration.next_prompt_validation_passed,
+                next_prompt_validation_issues: iteration.next_prompt_validation_issues.clone(),
+                next_prompt_repaired: iteration.next_prompt_repaired,
+                round_budget: iteration.round_budget.clone(),
             }
         })
         .collect::<Vec<_>>();
@@ -141,6 +152,8 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
         model: run.model.clone(),
         base_url: run.base_url.clone(),
         iteration_limit: run.iteration_limit,
+        round_budget: run.round_budget.clone(),
+        continue_after_timeout: run.continue_after_timeout,
         completed_iterations: run.iterations.len(),
         stop_reason: run.stop_reason.clone(),
         final_status: final_status(run).to_string(),
@@ -169,11 +182,11 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         analysis.completed_iterations
     ));
     out.push_str("## Rounds\n\n");
-    out.push_str("| Round | Status | Refiner | Files | Errors |\n");
-    out.push_str("| --- | --- | --- | --- | --- |\n");
+    out.push_str("| Round | Status | Refiner | Prompt validation | Files | Errors |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- |\n");
     for round in &analysis.rounds {
         out.push_str(&format!(
-            "| {} | {:?} | {} | {} | {} |\n",
+            "| {} | {:?} | {} | {} | {} | {} |\n",
             round.iteration,
             round.stop_reason,
             if round.refiner_was_called {
@@ -181,10 +194,21 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
             } else {
                 "no"
             },
+            validation_status(round),
             round.files_changed.len(),
             round.errors.len()
         ));
     }
+    out.push_str("\n## Round Budget\n\n");
+    out.push_str(&format!(
+        "- Style: `{}`\n- Max files per round: `{}`\n- Max actions per round: `{}`\n- Max verification commands per round: `{}`\n- Max next prompt chars: `{}`\n- Continue after timeout: `{}`\n",
+        analysis.round_budget.style,
+        analysis.round_budget.max_files,
+        analysis.round_budget.max_actions,
+        analysis.round_budget.max_tests,
+        analysis.round_budget.max_next_prompt_chars,
+        analysis.continue_after_timeout
+    ));
     out.push_str("\n## Round Chaining\n\n");
     out.push_str(&format!(
         "- Checked: `{}`\n- All inputs matched previous nextPrompt: `{}`\n",
@@ -428,6 +452,15 @@ fn list(out: &mut String, title: &str, values: &[String]) {
     out.push('\n');
 }
 
+fn validation_status(round: &YoloRoundAnalysis) -> String {
+    match round.next_prompt_validation_passed {
+        Some(true) if round.next_prompt_repaired => "repaired".to_string(),
+        Some(true) => "passed".to_string(),
+        Some(false) => "failed".to_string(),
+        None => "not run".to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -463,6 +496,10 @@ mod tests {
             refiner_raw_response: Some("next".to_string()),
             refiner_error: None,
             next_prompt_injected_into_agent: Some(format!("next {iteration}")),
+            next_prompt_validation_passed: Some(true),
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
             stop_reason: None,
         }
     }
@@ -476,6 +513,8 @@ mod tests {
             base_url: "http://127.0.0.1:8002/v1".to_string(),
             model: "qwen35-local".to_string(),
             iteration_limit: Some(2),
+            round_budget: RoundBudget::default(),
+            continue_after_timeout: false,
             max_repeated_prompts: 3,
             max_failures: 3,
             session_id: Some("session".to_string()),
@@ -506,6 +545,9 @@ mod tests {
         );
         assert_eq!(analysis.duration_seconds, 60);
         assert_eq!(analysis.final_status, "success");
+        assert_eq!(analysis.round_budget, RoundBudget::default());
+        assert!(!analysis.continue_after_timeout);
+        assert_eq!(analysis.rounds[0].next_prompt_validation_passed, Some(true));
     }
 
     #[test]
