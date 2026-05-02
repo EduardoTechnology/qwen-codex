@@ -150,5 +150,5 @@
 - Files changed summary: documented the compact-pressure result in verification/readiness/roadmap docs and added root `PULL_REQUEST.md`.
 - Tests run: live compact-pressure YOLO run in `/tmp/qwen-yolo-compact`; parsed generated `run.json` and `analysis.json`; `python3 -m json.tool` for compact run logs; grep for compaction/context markers; secret grep for `local-dev-key` and `Authorization`; copied compact logs to `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure`; `git diff --check`.
 - Result: compaction was not triggered. The run created 12 bounded `round-*.txt` files inside the first agent turn, then stopped safely with `stopReason=round_timeout`, `finalStatus=timeout`, valid JSON logs, `roundDurationNearTimeout=true`, `timeoutUtilizationPercent=100`, and no secret leak. This is documented as `CONTEXT-PRESSURE-BLOCKED`, not as auto-compaction evidence.
-- Commit hash: pending until commit.
-- Next step: commit and push this final pre-PR documentation pass.
+- Commit hash: `401dcff32e8eb6cdbee6616909d3544000827b64`.
+- Next step: push this final pre-PR documentation pass and open the PR.
