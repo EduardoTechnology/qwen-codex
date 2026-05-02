@@ -243,6 +243,10 @@ Iteration logs include:
 - Round budget used for that iteration
 - Stop reason when applicable
 
+For shell/file verification, the canonical fields are `actionsTaken`, `commandsTestsRun`, `filesChanged`, `actionsCapturedCount`, `commandsCapturedCount`, `filesChangedCount`, and `noActionRound`.
+
+`toolCallsSummary` is narrower. It records higher-level tool events exposed as `mcp_tool_call`, `collab_tool_call`, or `web_search` items. Built-in shell execution appears as `command_execution` and is summarized under `commandsTestsRun` and `actionsTaken`, while file changes appear under `filesChanged` and file-change action entries. Therefore `toolCallsSummary: []` does not mean the agent failed to use shell or file tools.
+
 Secrets are redacted before logs are written. The redactor covers common API keys, tokens, authorization headers, `.env` style secret assignments, credential fields, and private key blocks.
 
 JSON logs are redacted field-by-field before serialization, so raw newlines, ANSI escape sequences, interrupted output, and secret-like `.env` assignments remain valid JSON. Markdown logs are for human review only.

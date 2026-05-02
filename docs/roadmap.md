@@ -20,13 +20,15 @@ This roadmap tracks work that remains after the normal CLI and initial YOLO mile
 - Live bounded ecommerce YOLO rerun with clean round chaining, no timeout, valid logs, compose config/build passing, and backend runtime checks passing.
 - Live six-round ecommerce acceptance-gated run with `max_iterations`, valid logs, secret redaction, working round chaining, and a runnable Docker project verified by compose build plus backend/frontend curls.
 - Live 10-round notes-CLI YOLO stress run with valid logs, clean chaining, no provider/context errors, and passing manual CLI/tests.
-- Behavioral PDF and DOCX file generation through shell/file tools.
+- Behavioral PDF, DOCX, and XLSX file generation through shell/file tools.
+- Final capability verification pass covering normal shell/file/code workflows, YOLO action logging, 10-round stress logs, document generation, and context propagation.
 
 ## Next
 
-- Add or enable a real web search tool for local Qwen Codex. Current behavior test result: `CAPABILITY_MISSING` because `web_search` is unsupported by the active tool router.
-- Improve spreadsheet generation. Current XLSX behavior test result: `FAIL` because package-based generation could not install or import `pandas`/`openpyxl`, and `test.xlsx` was not created.
-- Add deterministic document-generation helpers or skills for PDF/DOCX/XLSX so local models do not need to improvise OOXML/PDF internals.
+- Add or enable a real web search/browser tool for local Qwen Codex. Current behavior test result: `CAPABILITY_MISSING` for native web search because `web_search` was not exposed or used by the active tool router. Shell `curl` network fetches work and retrieved Node.js release data from `nodejs.org`, but that is not native web-search parity.
+- Decide whether to add deterministic document-generation helpers or skills for PDF/DOCX/XLSX. Behavioral creation passed for all three formats through shell/file tools, but local models currently improvise PDF/OOXML internals or depend on whatever libraries happen to be installed.
+- Improve small multi-file project reliability. The final normal-mode Express test created real project files but placed `server.js` under `src/` while `package.json` starts `node server.js`, so exact runnable scaffolding still needs prompt/model hardening.
+- Improve YOLO mini-project stability under local Qwen. The final three-round notes CLI run preserved logs and chaining but hit `round_timeout` in round 3 and produced incomplete Python/tests.
 - Reduce long single-round agent turns on Docker projects. Guidance now tells the refiner to prefer `docker compose config`, use detached `up`, wrap long commands, and shrink scope after near-timeout rounds, but live Docker tasks can still produce long single turns.
 - Force a larger context/auto-compaction YOLO stress test near the 32768-token Qwen context limit. The 10-round notes run stayed below the compaction threshold and did not exercise an actual compaction event.
 - Exercise a live rejected-`YOLO_STOP` path. The focused test covers it, but the live model did not emit `YOLO_STOP` in the impossible-acceptance run.

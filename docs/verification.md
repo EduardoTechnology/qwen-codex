@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-01T21:16:00Z
+Last updated: 2026-05-02T20:56:34Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -72,6 +72,94 @@ Live tool-call compatibility verification:
 
 - `/tmp/qwen-normal-tool-test`: `qwen-codex` created `README.md` and `hello.py` in the current directory, ran `python hello.py`, printed `HELLO`, exited `0`, and emitted visible assistant text. No Qwen/vLLM validation errors and no `local-dev-key` leak were found in `output.log`.
 - `/tmp/yolo-smoke`: `qwen-codex --yolo --iterations 2` created `hello.txt` in iteration 1 and `README.md` in iteration 2. `iteration-002.json.agentInputPrompt == iteration-001.json.nextPrompt`, both iteration `errors` arrays were empty, and log redaction did not leak `local-dev-key`.
+
+## Final Capability Verification
+
+Capability verification was run on 2026-05-02 against the local Qwen/vLLM server at `http://127.0.0.1:8002/v1` with `QWEN_CODEX_MODEL=qwen35-local` and `QWEN_CODEX_CONTEXT_WINDOW=32768`.
+
+Copied 10-round stress logs:
+
+```text
+Source: /tmp/qwen-yolo-stress/.qwen-codex/yolo-runs/20260502T112858Z-331475
+Windows copy: /mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/stress-10rounds-20260502T112858Z-331475
+```
+
+10-round stress inspection:
+
+- `completedIterations: 10`
+- `stopReason: max_iterations`
+- `finalStatus: success`
+- Round chaining: pass, with every `agentInputPrompt` matching the previous `nextPrompt`.
+- Every round had `noActionRound=false`, `filesChangedCount=1`, and nonzero command/action capture.
+- Iteration action counts were `7, 4, 5, 3, 7, 5, 2, 2, 1, 2`.
+- Iteration command counts matched action counts.
+- `toolCallsSummary` was empty in every round, but that does not mean shell/file tools were unused. Shell commands were logged under `commandsTestsRun` and `actionsTaken`; changed files were logged under `filesChanged`.
+- The stress project exists at `/tmp/qwen-yolo-stress/notes_cli` with `README.md`, `cli.py`, and `test_cli.py`. Running `python3 test_cli.py` from that directory passed, then `python3 cli.py add "Inspect"` and `python3 cli.py list` worked.
+
+Focused tool/action diagnostic:
+
+- Normal mode workspace: `/tmp/qwen-tool-diagnostic`.
+- Normal mode created `tools-test.txt` containing `CONFIRMED`.
+- YOLO workspace: `/tmp/qwen-yolo-tool-diagnostic`.
+- YOLO run logs: `/tmp/qwen-yolo-tool-diagnostic/.qwen-codex/yolo-runs/20260502T203344Z-1262010`.
+- YOLO created `tools-test.txt` containing `CONFIRMED`.
+- YOLO diagnostics: `actionsCapturedCount=2`, `commandsCapturedCount=2`, `filesChangedCount=2`, `toolCallsCapturedCount=0`, `noActionRound=false`.
+
+Capability table:
+
+| Capability | Normal Mode | YOLO Mode | Status | Evidence | Limitation |
+| --- | --- | --- | --- | --- | --- |
+| Shell command execution | PASS | PASS | PASS | Normal `/tmp/qwen-capability-suite/add.py` prints `4`; YOLO diagnostic logged two shell commands and the 10-round stress logged commands every round. | Local model turns can still be slow. |
+| File creation | PASS | PASS | PASS | Normal `hello.txt` and `add.py`; YOLO `tools-test.txt`; stress `README.md`, `cli.py`, `test_cli.py`. | None found for simple file creation. |
+| File reading | PASS | PASS | PASS | Normal read prompt output referenced `HELLO_QWEN_CODEX`; YOLO diagnostic ran `cat /tmp/qwen-yolo-tool-diagnostic/tools-test.txt`. | In YOLO, file-read evidence is command/action logging, not `toolCallsSummary`. |
+| File editing | PASS | PASS | PASS | Normal edited `hello.txt` to `HELLO_QWEN_CODEX_EDITED`; 10-round YOLO stress updated the notes project across all rounds. | No isolated YOLO edit-only test was run beyond project iteration. |
+| Multi-file project | PARTIAL | PARTIAL | PARTIAL | Normal mode created `package.json`, `README.md`, and `src/server.js`; YOLO stress built a working notes CLI project. YOLO mini project created `README.md`, `notes.py`, and `test_notes.py`. | Normal Express test failed the exact check because `server.js` was under `src/` while `package.json` starts `node server.js`. YOLO mini run hit `round_timeout` and produced failing tests. |
+| Web search | PARTIAL | NOT_TESTED | CAPABILITY_MISSING for native web search | Normal prompt used shell `curl` against `https://nodejs.org/dist/index.json` and found `v24.15.0` LTS `Krypton`. | No dedicated `web_search`/browser tool was exposed or used in this local environment. Shell network fetch works, but that is not native web-search parity. |
+| PDF generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.pdf`: `PDF document, version 1.4, 1 page(s)`. | Text extraction was not available because `pdftotext` is not installed. |
+| DOCX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.docx`: `Microsoft Word 2007+`; `word/document.xml` contains the requested sentence. | Normal-mode shell/file workflow can create DOCX, but there is no dedicated document helper. |
+| XLSX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.xlsx`: `Microsoft Excel 2007+`; `xl/worksheets/sheet1.xml` contains `Name`, `Age`, `City`, `Alice`, `30`, and `Lisbon`. | Normal-mode shell/file workflow can create XLSX, but there is no dedicated spreadsheet helper. |
+| Docker compose workflow | NOT_TESTED in this pass | PASS | PASS | Prior six-round ecommerce acceptance-gated run passed `docker compose config`, `docker compose build`, backend `/health`, backend `/api/products`, and frontend `/`. | Docker rounds can still consume most of the timeout and need narrower prompts. |
+| YOLO round chaining | N/A | PASS | PASS | 10-round stress and YOLO mini both report `allRoundInputsMatchPreviousNextPrompt=true`. | None found in logged handoffs. |
+| Acceptance gate | N/A | PASS/PARTIAL | PARTIAL | Focused tests cover rejected `YOLO_STOP`; ecommerce acceptance gate passed real compose/build/runtime checks; fixed-iteration final acceptance behavior is covered. | Live impossible-acceptance run did not trigger a refiner `YOLO_STOP`, so the live rejected-stop path remains unobserved. |
+| Infinite mode | N/A | PASS | PASS | Focused tests cover omitted `--iterations` as infinite config and safety stops. | Live infinite run was not left unbounded; stability was exercised with bounded stress. |
+| Context/auto-compact | PASS config propagation | PASS config propagation | CONFIG-PROPAGATION-CONFIRMED-BUT-COMPACTION-NOT-TRIGGERED | Normal logs show `context_window=32768 auto_compact_token_limit=26214`. 10-round stress had no provider/context errors. | No compaction event was observed. A larger controlled token-growth stress test is still needed. |
+| Tool/action logging semantics | PASS | PASS | PASS | Code inspection and YOLO diagnostics show shell/file actions in `actionsTaken`, `commandsTestsRun`, and `filesChanged`; `toolCallsSummary` tracks `mcp_tool_call`, `collab_tool_call`, and `web_search` items. | `toolCallsSummary=[]` is not a shell/file no-op signal. Consumers should use the canonical action fields. |
+
+Normal-mode capability suite workspace:
+
+```text
+/tmp/qwen-capability-suite
+```
+
+Results:
+
+- File creation: PASS, `hello.txt` contains `HELLO_QWEN_CODEX`.
+- File reading: PASS, `normal-02-read.log` references `HELLO_QWEN_CODEX`.
+- File editing: PASS, `hello.txt` contains exactly `HELLO_QWEN_CODEX_EDITED`.
+- Command execution: PASS, `python3 add.py` outputs `4`.
+- Multi-file Express project: PARTIAL. The model created `package.json`, `README.md`, and `src/server.js` with `GET /health` on port `2228`, but `package.json` starts `node server.js` and no root `server.js` exists.
+- Web search: CAPABILITY_MISSING for native web-search/browser tools. The model used shell `curl` to fetch Node release data and found `v24.15.0` LTS `Krypton` from `nodejs.org`.
+- PDF: PASS, `file test.pdf` reports a one-page PDF.
+- DOCX: PASS, `file test.docx` reports Microsoft Word 2007+ and the requested text appears in `word/document.xml`.
+- XLSX: PASS, `file test.xlsx` reports Microsoft Excel 2007+ and the requested row appears in `xl/worksheets/sheet1.xml`.
+
+YOLO mini capability workspace:
+
+```text
+/tmp/qwen-yolo-capability
+/tmp/qwen-yolo-capability/.qwen-codex/yolo-runs/20260502T204115Z-1279469
+```
+
+Result:
+
+- `run.json` and `analysis.json`: valid JSON.
+- `completedIterations: 3`.
+- `stopReason: round_timeout`.
+- `finalStatus: timeout`.
+- Round chaining: pass.
+- Secret redaction: pass; no `local-dev-key` or `Authorization` string found in YOLO logs.
+- Project files: `notes_cli/README.md`, `notes_cli/notes.py`, and `notes_cli/test_notes.py`.
+- Runtime quality: partial/fail. Round 3 timed out after 600 seconds, `notes.py` was incomplete, and `pytest -q` failed with `NameError` for missing imported functions in the generated tests.
 
 ## Normal CLI Milestone Status
 
