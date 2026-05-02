@@ -111,7 +111,7 @@ Checks run for this milestone:
 - `cd codex-rs && ./target/debug/qwen-codex --help`: passed.
 - `cd codex-rs && ./target/debug/qwen-codex --version`: passed.
 - `cd codex-rs && ./target/debug/qwencodex --help`: passed.
-- `cd codex-rs && ./target/debug/qwen-codex --yolo --iterations 0 --yolo-log-dir <tmpdir> "Smoke prompt"`: passed and wrote `run.json` plus `run.md` without entering the agent/refiner loop.
+- `cd codex-rs && ./target/debug/qwen-codex --yolo --iterations 0 --yolo-log-dir <tmpdir> "Smoke prompt"`: now expected to fail because zero is invalid; omit `--iterations` for infinite mode.
 - `PATH="$HOME/.local/bin:$PATH" just bazel-lock-update`: passed.
 - `PATH="$HOME/.local/bin:$PATH" just bazel-lock-check`: passed.
 - `PATH="$HOME/.local/bin:$PATH" pnpm run format`: passed with the existing Node engine warning because this machine has Node `v20.20.0` while the repo asks for Node `>=22`.
@@ -121,9 +121,10 @@ YOLO behavior covered by tests:
 
 - CLI parsing for `--yolo`, `--iterations`, `-n`, and the optional `--10` shorthand.
 - Fixed iteration limits.
-- Fixed iteration runs exhaust the configured `--iterations N` by default.
-- `YOLO_STOP` is repaired into a focused continuation prompt by default.
-- `YOLO_STOP` can stop the run only when `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true` is explicitly configured.
+- Omitted `--iterations` runs in infinite mode.
+- `--iterations N`, `-n N`, and `--10` run at most `N` rounds.
+- `--iterations 0` is invalid; zero is not used to mean infinite.
+- `YOLO_STOP` is accepted by default unless the acceptance gate rejects it or refiner stop is explicitly disabled.
 - External verification commands are recorded in iteration logs and included in refiner context before the next prompt is generated.
 - Repeated prompt guard.
 - Consecutive failure guard.
@@ -393,7 +394,7 @@ Project verification after timeout:
 
 Conclusion:
 
-- The requested default iteration semantics are fixed in code and unit tests: `YOLO_STOP` is ignored/repaired by default, fixed iteration runs are not stopped by the refiner, and opt-in refiner stop remains available.
+- Historical note: the requested iteration semantics at that point made `YOLO_STOP` ignored/repaired by default. This has since changed; current default YOLO mode accepts `YOLO_STOP`, and omitted `--iterations` means infinite mode.
 - External verification is implemented and worked as intended in the live run.
 - The live ecommerce run did not satisfy the desired `completedIterations=5` / `stopReason=max_iterations` acceptance result because the local Qwen agent timed out during round 2. This is now logged honestly as `round_timeout`, not as a refiner stop or interruption.
 - Remaining product work: improve agent-round completion behavior for larger generated-app tasks, or provide a user-visible mode to continue after timeout when the partially completed round created useful files.
@@ -459,9 +460,74 @@ Conclusion:
 - The ecommerce project from this run is small but actually runnable.
 - Remaining limitation: the main six-round run did not exercise a rejected `YOLO_STOP` in live mode because the refiner never emitted a stop signal; that path is covered by unit tests.
 
+## YOLO Infinite Defaults And Acceptance Rejection Verification
+
+Current iteration semantics:
+
+- Omitting `--iterations` means infinite mode. The loop continues until accepted `YOLO_STOP` or a safety stop.
+- `--iterations N`, `-n N`, and the `--10` shorthand run at most `N` rounds.
+- `--iterations 0`, `-n 0`, and `--0` are invalid. The CLI exits with: `--iterations must be greater than 0; omit --iterations for infinite YOLO mode`.
+- `YOLO_STOP` is accepted by default unless `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false` or the acceptance gate rejects it.
+
+Safety stops covered by code/tests:
+
+- Accepted `YOLO_STOP`.
+- Ctrl+C / interrupt flag between rounds.
+- Per-round timeout.
+- Repeated prompt guard in infinite mode.
+- Consecutive failure guard.
+- Agent subprocess errors.
+- Refiner/provider fatal errors.
+- Acceptance-gate rejection with no valid repair prompt.
+- Delegated Codex context/compaction fatal errors.
+
+Focused tests:
+
+- `cargo test -p codex-qwen yolo -- --nocapture`: passed, 58 matching tests.
+- `cargo test -p codex-qwen yolo_acceptance -- --nocapture`: passed, 3 tests.
+- `cargo test -p codex-qwen yolo_timeout -- --nocapture`: passed, 1 test.
+
+Live acceptance-rejection attempt:
+
+- Workspace: `/tmp/qwen-yolo-stop-reject`
+- Run directory: `/tmp/qwen-yolo-stop-reject/.qwen-codex/yolo-runs/20260502T112717Z-327102`
+- Command shape: `qwen-codex --yolo-refiner --iterations 3 --yolo-round-timeout-secs 600 --yolo-acceptance-gate --yolo-acceptance-command "test -f MUST_EXIST_BEFORE_STOP.txt" --dangerously-bypass-approvals-and-sandbox "<tiny project prompt>"`
+- Completed iterations: `3`.
+- Stop reason: `max_iterations`.
+- Final status: `partial`.
+- JSON validity: `PASS`; `run.json`, `analysis.json`, and all iteration JSON files parsed.
+- Round chaining: `PASS`.
+- Secret redaction: `PASS`; no `local-dev-key` or `authorization:` text found.
+- Live `YOLO_STOP` rejection: `NOT TRIGGERED`; the refiner did not emit `YOLO_STOP`.
+- Final acceptance at max iterations: `PASS`; the impossible command ran, failed, was logged under `acceptanceResults`, and prevented success.
+
+Because the live model did not emit `YOLO_STOP`, the actual rejected-stop continuation path remains proven by the focused `yolo_acceptance_rejects_stop_signal_and_injects_repair_prompt` test, which forces `YOLO_STOP`, records `stopSignalRejected=true`, captures failed acceptance output, injects a repair prompt, and verifies the next round receives that prompt.
+
+## 10-Round YOLO Stress Verification
+
+Workspace: `/tmp/qwen-yolo-stress`
+
+Run directory: `/tmp/qwen-yolo-stress/.qwen-codex/yolo-runs/20260502T112858Z-331475`
+
+Command shape: `qwen-codex --yolo-refiner --iterations 10 --yolo-round-timeout-secs 600 --dangerously-bypass-approvals-and-sandbox "<small Python notes CLI prompt>"` with small round budgets (`maxFiles=4`, `maxActions=3`, `maxTests=2`, `maxPromptChars=2200`).
+
+Result:
+
+- Completed iterations: `10`.
+- Stop reason: `max_iterations`.
+- Final status: `success`.
+- JSON validity: `PASS`; `run.json`, `analysis.json`, and all iteration JSON files parsed.
+- Round chaining: `PASS`; every continued round input matched the previous `nextPrompt`.
+- Provider/context errors: `PASS`; no timeouts, interruptions, agent errors, provider errors, or refiner errors were reported.
+- Repeated prompt failure: `PASS`; not triggered.
+- Secret redaction: `PASS`; no `local-dev-key` or `authorization:` text found.
+- Manual project check: `python test_cli.py` passed with `test_list_notes_empty PASSED` and `test_add_single_note PASSED`; `python cli.py add "Manual check" && python cli.py list` worked.
+- Timeout utilization: highest observed round was 115s of 600s (`19%`); all `roundDurationNearTimeout` values were `false`.
+- Auto-compact: no compaction marker or context error appeared in the logs. This run confirms 10-round chaining below the threshold, but it did not force an actual auto-compaction event.
+
 ## Context Management
 
-Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.
+Status: `PARTIALLY-CONFIRMED`.
 
 Evidence:
 
@@ -473,8 +539,10 @@ Evidence:
 - `codex-rs/core/src/session/turn.rs` uses `model_info.auto_compact_token_limit()` for pre-turn and mid-turn compaction.
 - `codex-rs/core/src/session/turn_context.rs` derives the effective context window from resolved model metadata.
 - YOLO calls normal `codex exec --json` and then `codex exec --json resume <thread-id> <prompt>`, so it uses the same Qwen config and upstream compaction path as normal mode.
+- The 10-round stress run completed cleanly with no provider/context errors and no repeated-prompt failure.
+- No auto-compaction marker appeared in that stress run; the run stayed below the level needed to prove an actual compaction event.
 
-Long-running/infinite YOLO compaction has not been stress-tested beyond config propagation and unit coverage.
+Long-running/infinite YOLO context safety is partially confirmed: config propagation and 10-round chaining are verified, but live auto-compaction itself remains unexercised.
 
 ## Behavioral Tool Tests
 
