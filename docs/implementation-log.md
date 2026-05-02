@@ -80,3 +80,12 @@
 - Result: focused tests passed. Timeout smoke stopped with `round_timeout` and valid JSON/analysis logs. Agent-error smoke stopped with `agent_error`, `agentProcessExitCode == 1`, and `refinerSkippedReason == "agent_error"`. The old ecommerce `filesystem` MCP message was determined to be a model-requested non-existent MCP server in this config, not a YOLO-only missing tool setup.
 - Commit hash: `6a0b6d34d9c55bee753fa7f9c5c83b8056214f0f`.
 - Next step: push these fixes, then rerun the five-round ecommerce YOLO test with `--yolo-round-timeout-secs 1200`.
+
+## 2026-05-02T00:39:00Z
+
+- Objective: document the five-round ecommerce YOLO UX rerun after the timeout/analysis fix.
+- Files changed summary: verification documentation only.
+- Tests run: live ecommerce YOLO run in `/tmp/qwen-yolo-ecommerce`; `python3 -m json.tool` for `run.json`, `analysis.json`, and every `iteration-*.json`; round-chaining assertion across logged iterations; secret grep for `local-dev-key` and `authorization:`; project structure checks; endpoint/feature `rg` checks; `docker compose config`; `docker compose build`.
+- Result: the run did not complete all five rounds. Rounds 1-3 completed normally, called the refiner, and chained correctly. Round 4 timed out at 1200 seconds, skipped the refiner, and stopped cleanly with valid logs. The generated project is partial: it has backend/frontend/compose files but no root README, `docker compose config` only activates backend due generated profile issues, and `docker compose build` fails because `seed-data.js` is missing.
+- Commit hash: `PENDING`.
+- Next step: commit and push the verification documentation, then decide whether to add a YOLO round-budget/progress strategy before another ecommerce rerun.

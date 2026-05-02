@@ -210,6 +210,66 @@ Unified analysis logs:
 - `analysis.json` records whole-run status, round chaining, refiner call status, subprocess exit fields, timeouts, interruptions, agent errors, provider/refiner errors, and important project artifacts.
 - The five-round ecommerce test is still pending after this fix commit.
 
+## YOLO 5-Round Ecommerce UX Review
+
+Command used:
+
+```text
+qwen-codex --yolo-refiner --iterations 5 --yolo-round-timeout-secs 1200 --dangerously-bypass-approvals-and-sandbox "<Dockerized ecommerce prompt>"
+```
+
+Run paths:
+
+- Workspace: `/tmp/qwen-yolo-ecommerce`
+- Logs: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260501T235922Z-1827070`
+- Analysis JSON: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260501T235922Z-1827070/analysis.json`
+- Analysis Markdown: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260501T235922Z-1827070/analysis.md`
+
+Result:
+
+- Completed all 5 rounds: `NO`.
+- Stop reason: `round_timeout`.
+- Final status: `timeout`.
+- Completed iterations logged: `4`.
+- Rounds 1-3 completed with agent exit code `0`, called the refiner, and wrote `nextPrompt`.
+- Round 4 timed out after 1200 seconds, skipped the refiner, and wrote valid final logs.
+- Round chaining: `PASS` for all logged handoffs. Round 2 input matched round 1 `nextPrompt`, round 3 input matched round 2 `nextPrompt`, and round 4 input matched round 3 `nextPrompt`.
+- Secret redaction: `PASS`; neither `local-dev-key` nor `authorization:` appeared in the run logs.
+- JSON validation: `run.json`, `analysis.json`, and all `iteration-*.json` files parsed with `python3 -m json.tool`.
+
+Round review:
+
+| Round | Agent result | Refiner called? | Refiner next prompt summary | Files changed | Errors | Coherent improvement? |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Created initial Docker/backend scaffolding and compose files. | Yes | Asked for core Express/Mongo backend implementation. | Dockerfile/backend and compose artifacts. | None | Yes. It narrowed the next step to backend functionality. |
+| 2 | Added backend code, routes, models, and Docker changes. | Yes | Asked for frontend package, Dockerfile, and React implementation. | Backend and compose artifacts. | None | Yes. It identified the missing frontend. |
+| 3 | Added frontend scaffolding. | Yes | Asked for detailed React source, cart context, API client, pages, and routing. | Frontend plus previous artifacts. | None | Yes, but it was large for one round. |
+| 4 | Began frontend implementation but did not finish before timeout. | No | None, because timeout skipped refiner. | Frontend/backend project files present. | `agent round timed out after 1200 second(s)` | Partial. The timeout prevented another hang and preserved logs. |
+
+Project verification:
+
+- `docker-compose.yml`: present.
+- Root `README.md`: missing.
+- `frontend/`: present with React source files.
+- `backend/`: present with Express/Mongo source files.
+- Host ports: `2225`, `2226`, and `2227` appear in `docker-compose.yml`.
+- Forbidden host ports: none of the explicitly forbidden host ports were found in compose; `1200` only appeared as a CSS max-width value in frontend code.
+- Backend endpoint code: `/health`, `/api/products`, auth register/login, cart routes, and orders routes are present in source.
+- Frontend feature code: product listing/detail, cart UI, login/register, and checkout/order flow appear in source.
+
+Docker validation:
+
+- `docker compose config`: exited `0`, but only the backend service was active because generated frontend and mongo services were placed under an invalid-looking `-e` profile. Compose also warned that `version` is obsolete.
+- `docker compose build`: `FAIL`. Backend build failed because `Dockerfile.backend` references `seed-data.js`, but that file is missing.
+- `docker compose up`: not run because build failed.
+
+UX conclusion:
+
+- The intended autonomous handoff UX worked for three complete refiner cycles.
+- The previous ambiguous interruption problem did not recur.
+- The fourth round showed that realistic product tasks can still run too long for one agent round. The timeout now prevents indefinite hangs and produces valid logs, but the generated ecommerce project is not release-ready.
+- The next product/UX improvement should reduce per-round task scope or add a progress/round-budget strategy so the refiner can split large implementation prompts before a 20-minute round timeout.
+
 ## Context Management
 
 Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.
