@@ -82,12 +82,16 @@ qwen-codex exec "Summarize this repository."
 
 A bare prompt is routed to `codex exec --skip-git-repo-check` with Qwen provider overrides. This preserves the upstream Codex agent architecture.
 
+Native web search/browser tools depend on the active Codex tool environment. In the verified local Qwen setup, native `web_search` was not available; shell network commands such as `curl` can still work when the sandbox/network policy allows them.
+
 ## YOLO Mode
 
 YOLO mode runs repeated normal Codex agent rounds and asks a separate OpenAI-compatible refiner model for the next prompt between rounds.
 
 ```sh
 qwen-codex --yolo-refiner "Create a minimal README for this project."
+qwen-codex --yolo "Keep improving until YOLO_STOP or a safety stop."
+qwen-codex --yolo --iterations 5 "Refine this project."
 qwen-codex --yolo-refiner --iterations 10 "Refine this project."
 qwen-codex --yolo-refiner -n 3 "Improve tests and docs."
 qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2225" "Improve runtime health."
@@ -208,6 +212,16 @@ pnpm run format
 `pnpm run format` emits a Node.js engine warning on Node v20; Node v22+ is required for full compatibility but formatting still passes.
 
 The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside a Docker service network, use the service hostname and container port, for example `http://qwen35-vllm:8000/v1`. Do not use host port `8000` if another local service already owns it.
+
+When syncing from upstream, prefer merging `upstream/main` into this fork's `main` so Qwen-specific history remains visible:
+
+```sh
+git fetch upstream
+git checkout main
+git merge upstream/main
+```
+
+See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and validation steps.
 
 ## Documentation
 

@@ -134,3 +134,12 @@
 - Result: normal shell/file/read/edit/command workflows passed. Normal document generation passed for PDF, DOCX, and XLSX. The normal Express multi-file prompt was partial because it wrote `src/server.js` while `package.json` starts `node server.js`. Dedicated web search/browser tooling remains capability-missing, though shell `curl` fetched Node.js release data from `nodejs.org`. The 10-round YOLO stress logs prove actions/commands/files were captured and round chaining was clean. `toolCallsSummary` is not the canonical shell/file field. The YOLO mini run preserved JSON logs, redaction, and chaining, but stopped with `round_timeout` in round 3 and generated incomplete Python/tests. Context-window propagation is confirmed at `32768` with compact threshold `26214`; no actual compaction event was triggered.
 - Commit hash: `73f48f4031f0411b74c2d111e5dc8a2401afa44d`.
 - Next step: push the branch and decide whether to open the PR with the documented remaining limitations.
+
+## 2026-05-02T21:25:08Z
+
+- Objective: prepare final PR-readiness notes and keep the last hardening pass small.
+- Files changed summary: added `docs/pr-readiness.md`, added a native web-search caveat and explicit finite/infinite YOLO examples to README, documented scaffold entrypoint mismatch as a known local-model quality issue, updated roadmap wording for scaffold self-checking prompts, and ignored local `.qwen-codex/` YOLO logs.
+- Tests run: `git fetch upstream`; `git status --short`; tracked-artifact checks for `.qwen-codex` and generated test outputs; placeholder secret scan; `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo`; `cargo test -p codex-qwen yolo_acceptance`; `cargo test -p codex-qwen yolo_timeout`; `cargo build -p codex-cli`; `./target/debug/qwen-codex --help`; `./target/debug/qwen-codex --version`; `./target/debug/qwencodex --help`; `git diff --check`.
+- Result: final checks passed. No runtime code changed. The existing untracked `deploy/` directory was left untracked. Native web-search/browser support, actual auto-compaction event coverage, live rejected-`YOLO_STOP`, long local-model turns, and local-Qwen scaffold consistency remain documented limitations.
+- Commit hash: pending until commit.
+- Next step: push the PR-readiness docs commit and open a PR to `main`.

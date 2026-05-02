@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-02T20:56:34Z
+Last updated: 2026-05-02T21:25:08Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -125,6 +125,12 @@ Capability table:
 | Context/auto-compact | PASS config propagation | PASS config propagation | CONFIG-PROPAGATION-CONFIRMED-BUT-COMPACTION-NOT-TRIGGERED | Normal logs show `context_window=32768 auto_compact_token_limit=26214`. 10-round stress had no provider/context errors. | No compaction event was observed. A larger controlled token-growth stress test is still needed. |
 | Tool/action logging semantics | PASS | PASS | PASS | Code inspection and YOLO diagnostics show shell/file actions in `actionsTaken`, `commandsTestsRun`, and `filesChanged`; `toolCallsSummary` tracks `mcp_tool_call`, `collab_tool_call`, and `web_search` items. | `toolCallsSummary=[]` is not a shell/file no-op signal. Consumers should use the canonical action fields. |
 
+PR-readiness classification:
+
+- PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and the 10-round stress run without provider/context errors.
+- PARTIAL: larger multi-file scaffolds with local Qwen can still produce small consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but no compaction event was triggered; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests only.
+- CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` is a useful fallback when network is allowed, but it is not a native web-search pass.
+
 Normal-mode capability suite workspace:
 
 ```text
@@ -142,6 +148,12 @@ Results:
 - PDF: PASS, `file test.pdf` reports a one-page PDF.
 - DOCX: PASS, `file test.docx` reports Microsoft Word 2007+ and the requested text appears in `word/document.xml`.
 - XLSX: PASS, `file test.xlsx` reports Microsoft Excel 2007+ and the requested row appears in `xl/worksheets/sheet1.xml`.
+
+Known scaffold quality issue:
+
+- The Express scaffold result shows a local-model output consistency issue, not a missing shell/file capability. The agent created useful files but did not self-check that package scripts pointed to the generated entrypoint.
+- Recommended prompt hardening for future scaffold tasks: ask the agent to verify that every package script or documented run command points to an actual generated file before summarizing completion.
+- Qwen Codex normal mode intentionally delegates directly to upstream `codex exec`; no broad wrapper-level normal-mode instruction was added for this narrow model-output issue.
 
 YOLO mini capability workspace:
 
