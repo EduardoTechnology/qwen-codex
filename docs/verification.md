@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-02T21:25:08Z
+Last updated: 2026-05-02T21:48:09Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -122,13 +122,13 @@ Capability table:
 | YOLO round chaining | N/A | PASS | PASS | 10-round stress and YOLO mini both report `allRoundInputsMatchPreviousNextPrompt=true`. | None found in logged handoffs. |
 | Acceptance gate | N/A | PASS/PARTIAL | PARTIAL | Focused tests cover rejected `YOLO_STOP`; ecommerce acceptance gate passed real compose/build/runtime checks; fixed-iteration final acceptance behavior is covered. | Live impossible-acceptance run did not trigger a refiner `YOLO_STOP`, so the live rejected-stop path remains unobserved. |
 | Infinite mode | N/A | PASS | PASS | Focused tests cover omitted `--iterations` as infinite config and safety stops. | Live infinite run was not left unbounded; stability was exercised with bounded stress. |
-| Context/auto-compact | PASS config propagation | PASS config propagation | CONFIG-PROPAGATION-CONFIRMED-BUT-COMPACTION-NOT-TRIGGERED | Normal logs show `context_window=32768 auto_compact_token_limit=26214`. 10-round stress had no provider/context errors. | No compaction event was observed. A larger controlled token-growth stress test is still needed. |
+| Context/auto-compact | PASS config propagation | PASS config propagation | CONTEXT-PRESSURE-BLOCKED | Normal logs show `context_window=32768 auto_compact_token_limit=26214`. The 10-round stress had no provider/context errors. The compact-pressure attempt hit `round_timeout` in the first YOLO round after creating 12 text files. | No actual compaction event was observed; the best-effort pressure run was blocked by long single-round model behavior. |
 | Tool/action logging semantics | PASS | PASS | PASS | Code inspection and YOLO diagnostics show shell/file actions in `actionsTaken`, `commandsTestsRun`, and `filesChanged`; `toolCallsSummary` tracks `mcp_tool_call`, `collab_tool_call`, and `web_search` items. | `toolCallsSummary=[]` is not a shell/file no-op signal. Consumers should use the canonical action fields. |
 
 PR-readiness classification:
 
 - PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and the 10-round stress run without provider/context errors.
-- PARTIAL: larger multi-file scaffolds with local Qwen can still produce small consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but no compaction event was triggered; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests only.
+- PARTIAL: larger multi-file scaffolds with local Qwen can still produce small consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but the best-effort context-pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests only.
 - CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` is a useful fallback when network is allowed, but it is not a native web-search pass.
 
 Normal-mode capability suite workspace:
@@ -625,9 +625,35 @@ Result:
 - Timeout utilization: highest observed round was 115s of 600s (`19%`); all `roundDurationNearTimeout` values were `false`.
 - Auto-compact: no compaction marker or context error appeared in the logs. This run confirms 10-round chaining below the threshold, but it did not force an actual auto-compaction event.
 
+## Best-Effort Context Pressure Verification
+
+Status: `CONTEXT-PRESSURE-BLOCKED`.
+
+Workspace: `/tmp/qwen-yolo-compact`
+
+Run directory: `/tmp/qwen-yolo-compact/.qwen-codex/yolo-runs/20260502T213530Z-1376298`
+
+Windows log copy: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure/20260502T213530Z-1376298`
+
+Command shape: `qwen-codex --yolo-refiner --iterations 15 --yolo-round-timeout-secs 600 --dangerously-bypass-approvals-and-sandbox "<controlled context-pressure prompt>"` with small round budgets (`maxFiles=3`, `maxActions=3`, `maxTests=2`, `maxPromptChars=2200`).
+
+Result:
+
+- Completed iterations: `1`.
+- Stop reason: `round_timeout`.
+- Final status: `timeout`.
+- JSON validity: `PASS`; `run.json`, `analysis.json`, and `iteration-001.json` parsed.
+- Secret redaction: `PASS`; no `local-dev-key` or `Authorization` string was found in logs.
+- Files created: 12 text files, `round-1.txt` through `round-12.txt`.
+- Timeout utilization: `100%`; `roundDurationNearTimeout=true`.
+- Round chaining: not exercised because the first agent turn never handed back for a second YOLO round.
+- Compaction markers: not found. Searches for `compact`, `compaction`, `auto-compact`, `context window`, `token limit`, context-exceeded patterns, and model-context markers did not find a clear compaction event.
+
+Conclusion: this was a useful pressure attempt but not a successful auto-compaction reproduction. The local model treated the bounded prompt as one long agent turn, created many requested files in that single turn, and hit the 600-second safety timeout before YOLO could chain enough resumed turns to exercise upstream compaction. Do not claim actual auto-compaction from this run.
+
 ## Context Management
 
-Status: `PARTIALLY-CONFIRMED`.
+Status: `PARTIALLY-CONFIRMED`; latest pressure status is `CONTEXT-PRESSURE-BLOCKED`.
 
 Evidence:
 
@@ -641,8 +667,9 @@ Evidence:
 - YOLO calls normal `codex exec --json` and then `codex exec --json resume <thread-id> <prompt>`, so it uses the same Qwen config and upstream compaction path as normal mode.
 - The 10-round stress run completed cleanly with no provider/context errors and no repeated-prompt failure.
 - No auto-compaction marker appeared in that stress run; the run stayed below the level needed to prove an actual compaction event.
+- The 15-round compact-pressure attempt created 12 bounded text files in one agent turn, then hit `round_timeout` before multi-round compaction pressure was reached.
 
-Long-running/infinite YOLO context safety is partially confirmed: config propagation and 10-round chaining are verified, but live auto-compaction itself remains unexercised.
+Long-running/infinite YOLO context safety is partially confirmed: config propagation and 10-round chaining are verified, and a pressure attempt stopped safely with valid logs, but live auto-compaction itself remains unexercised.
 
 ## Behavioral Tool Tests
 
@@ -653,6 +680,6 @@ Workspace: `/tmp/tool-test`.
 | Web search      | `CAPABILITY_MISSING` | Prompt attempted `web_search`; upstream router logged `unsupported call: web_search`.                                                                                    |
 | PDF generation  | `PASS`               | `test.pdf` exists; `file` reports `PDF document, version 1.4, 1 page(s), ASCII text`.                                                                                    |
 | DOCX generation | `PASS`               | `test.docx` exists; `file` reports `Microsoft Word 2007+`; `word/document.xml` contains `Hello World`.                                                                   |
-| XLSX generation | `FAIL`               | Prompt attempted package-based spreadsheet creation, but `pandas`/`openpyxl` were unavailable and network/package installation was blocked; `test.xlsx` was not created. |
+| XLSX generation | `EARLIER FAIL; FINAL PASS` | This earlier prompt attempted package-based spreadsheet creation, but final capability verification later created a valid `test.xlsx` under `/tmp/qwen-capability-suite`. |
 
 The behavioral tests verify agent/tool execution through shell/file creation, not dedicated first-class PDF/DOCX/XLSX skills. Missing or failed capabilities are tracked in `docs/roadmap.md`.

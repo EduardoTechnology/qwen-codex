@@ -141,5 +141,14 @@
 - Files changed summary: added `docs/pr-readiness.md`, added a native web-search caveat and explicit finite/infinite YOLO examples to README, documented scaffold entrypoint mismatch as a known local-model quality issue, updated roadmap wording for scaffold self-checking prompts, and ignored local `.qwen-codex/` YOLO logs.
 - Tests run: `git fetch upstream`; `git status --short`; tracked-artifact checks for `.qwen-codex` and generated test outputs; placeholder secret scan; `cd codex-rs && just fmt`; `cargo test -p codex-qwen yolo`; `cargo test -p codex-qwen yolo_acceptance`; `cargo test -p codex-qwen yolo_timeout`; `cargo build -p codex-cli`; `./target/debug/qwen-codex --help`; `./target/debug/qwen-codex --version`; `./target/debug/qwencodex --help`; `git diff --check`.
 - Result: final checks passed. No runtime code changed. The existing untracked `deploy/` directory was left untracked. Native web-search/browser support, actual auto-compaction event coverage, live rejected-`YOLO_STOP`, long local-model turns, and local-Qwen scaffold consistency remain documented limitations.
-- Commit hash: pending until commit.
+- Commit hash: `5d36617c7434e2ba9dd36a4fdedab0016959c423`.
 - Next step: push the PR-readiness docs commit and open a PR to `main`.
+
+## 2026-05-02T21:48:09Z
+
+- Objective: make one bounded best-effort attempt to exercise auto-compaction/context pressure before opening the PR.
+- Files changed summary: documented the compact-pressure result in verification/readiness/roadmap docs and added root `PULL_REQUEST.md`.
+- Tests run: live compact-pressure YOLO run in `/tmp/qwen-yolo-compact`; parsed generated `run.json` and `analysis.json`; `python3 -m json.tool` for compact run logs; grep for compaction/context markers; secret grep for `local-dev-key` and `Authorization`; copied compact logs to `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure`; `git diff --check`.
+- Result: compaction was not triggered. The run created 12 bounded `round-*.txt` files inside the first agent turn, then stopped safely with `stopReason=round_timeout`, `finalStatus=timeout`, valid JSON logs, `roundDurationNearTimeout=true`, `timeoutUtilizationPercent=100`, and no secret leak. This is documented as `CONTEXT-PRESSURE-BLOCKED`, not as auto-compaction evidence.
+- Commit hash: pending until commit.
+- Next step: commit and push this final pre-PR documentation pass.

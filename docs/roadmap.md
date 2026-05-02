@@ -25,12 +25,12 @@ This roadmap tracks work that remains after the normal CLI and initial YOLO mile
 
 ## Next
 
-- Add or enable a real web search/browser tool for local Qwen Codex. Current behavior test result: `CAPABILITY_MISSING` for native web search because `web_search` was not exposed or used by the active tool router. Shell `curl` network fetches work and retrieved Node.js release data from `nodejs.org`, but that is not native web-search parity.
+- Add or enable a real web search/browser tool for local Qwen Codex via upstream native support or an MCP/search provider bridge. Current behavior test result: `CAPABILITY_MISSING` for native web search because `web_search` was not exposed or used by the active tool router. Shell `curl` network fetches work and retrieved Node.js release data from `nodejs.org`, but that is not native web-search parity.
 - Decide whether to add deterministic document-generation helpers or skills for PDF/DOCX/XLSX. Behavioral creation passed for all three formats through shell/file tools, but local models currently improvise PDF/OOXML internals or depend on whatever libraries happen to be installed.
 - Improve scaffold self-checking prompts so generated package scripts match generated file paths. The final normal-mode Express test created real project files but placed `server.js` under `src/` while `package.json` starts `node server.js`, so exact runnable scaffolding still needs prompt/model hardening.
 - Improve YOLO mini-project stability under local Qwen. The final three-round notes CLI run preserved logs and chaining but hit `round_timeout` in round 3 and produced incomplete Python/tests.
 - Reduce long single-round agent turns on Docker projects. Guidance now tells the refiner to prefer `docker compose config`, use detached `up`, wrap long commands, and shrink scope after near-timeout rounds, but live Docker tasks can still produce long single turns.
-- Force a larger context/auto-compaction YOLO stress test near the 32768-token Qwen context limit. The 10-round notes run stayed below the compaction threshold and did not exercise an actual compaction event.
+- Design a safer context/auto-compaction YOLO stress test near the 32768-token Qwen context limit. The 10-round notes run stayed below the compaction threshold, and the 15-round compact-pressure attempt was blocked by a long first agent turn that hit `round_timeout` before resumed-turn compaction pressure was reached.
 - Exercise a live rejected-`YOLO_STOP` path. The focused test covers it, but the live model did not emit `YOLO_STOP` in the impossible-acceptance run.
 - Expand integration coverage around Codex JSON event parsing if upstream event shapes change.
 - Add more community model compose files under `modelo/`.

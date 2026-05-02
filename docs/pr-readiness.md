@@ -1,6 +1,6 @@
 # PR Readiness
 
-Last updated: 2026-05-02T21:25:08Z
+Last updated: 2026-05-02T21:48:09Z
 
 ## Branch
 
@@ -40,7 +40,7 @@ See [docs/verification.md](verification.md#final-capability-verification).
 Release classification:
 
 - PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and 10-round YOLO stress without provider/context errors.
-- PARTIAL: larger multi-file scaffolds can still have local-model consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but actual compaction was not triggered; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests.
+- PARTIAL: larger multi-file scaffolds can still have local-model consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but the best-effort pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests.
 - CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` can work when network is allowed, but it is not native web-search parity.
 
 ## Manual Evidence
@@ -52,6 +52,8 @@ Key run paths:
 - Normal capability suite: `/tmp/qwen-capability-suite`
 - YOLO tool diagnostic: `/tmp/qwen-yolo-tool-diagnostic/.qwen-codex/yolo-runs/20260502T203344Z-1262010`
 - YOLO mini capability: `/tmp/qwen-yolo-capability/.qwen-codex/yolo-runs/20260502T204115Z-1279469`
+- Compact-pressure attempt: `/tmp/qwen-yolo-compact/.qwen-codex/yolo-runs/20260502T213530Z-1376298`
+- Windows copy of compact-pressure logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure/20260502T213530Z-1376298`
 - Ecommerce acceptance-gated verification: documented in [docs/verification.md](verification.md)
 
 ## Commands Passed
@@ -113,7 +115,7 @@ This branch currently has no common merge-base with the fetched `upstream/main` 
 - Shell `curl` network access is a useful fallback but not native web-search parity.
 - Larger local-Qwen scaffold tasks can still produce small consistency bugs, such as package scripts pointing to the wrong generated entrypoint.
 - The final YOLO mini capability run timed out in round 3 and generated failing Python tests.
-- Auto-compact config propagation is confirmed, but no actual compaction event was triggered.
+- Auto-compact config propagation is confirmed, but no actual compaction event was triggered. The best-effort 15-round pressure attempt created 12 text files in one agent turn and then stopped safely with `round_timeout` before resumed-turn compaction pressure was reached.
 - Live rejected-`YOLO_STOP` was not triggered by the model, though focused tests cover acceptance-gate rejection and repair prompting.
 - Docker projects can still produce long single-agent turns; refiner guidance narrows future prompts but does not guarantee short local-model turns.
 
