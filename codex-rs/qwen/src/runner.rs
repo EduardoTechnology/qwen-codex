@@ -179,6 +179,10 @@ YOLO OPTIONS:
                                   Maximum accepted refiner next-prompt length
     --yolo-refiner-style <STYLE>  Refiner planning style; default is incremental
     --yolo-continue-after-timeout Continue with a smaller retry prompt after timeout; default false
+    --yolo-allow-refiner-stop     Allow YOLO_STOP to end the run; default false
+    --yolo-verify-commands <CMDS> Run semicolon-separated shell commands after each round
+    --yolo-verify-timeout-secs <N>
+                                  Timeout for each external verification command; default 15 seconds
     --max-repeated-prompts <N>    Repeated prompt guard
     --max-failures <N>            Repeated failure guard
     --dangerously-bypass-approvals-and-sandbox
@@ -198,6 +202,9 @@ ENVIRONMENT:
     QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS default: {next_prompt_max_chars}
     QWEN_CODEX_YOLO_REFINER_STYLE default: {refiner_style}
     QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT default: {continue_after_timeout}
+    QWEN_CODEX_YOLO_ALLOW_REFINER_STOP default: {allow_refiner_stop}
+    QWEN_CODEX_YOLO_VERIFY_COMMANDS semicolon-separated external verification commands
+    QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS default: {verify_timeout_secs}
 
     A local .env file in the current directory is loaded for QWEN_CODEX_* and supported alias variables.
     Precedence is CLI flags, QWEN_CODEX_* environment, short aliases, documented defaults.
@@ -208,6 +215,7 @@ EXAMPLES:
     qwen-codex --model qwen35-local exec "Summarize this repository."
     qwen-codex --yolo-refiner --iterations 10 "Refine this project."
     qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Autonomously refine this project."
+    qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2225" "Improve runtime health."
 "#,
         version = env!("CARGO_PKG_VERSION"),
         base_url = config.base_url,
@@ -222,7 +230,9 @@ EXAMPLES:
         round_max_tests = config.yolo.round_budget.max_tests,
         next_prompt_max_chars = config.yolo.round_budget.max_next_prompt_chars,
         refiner_style = &config.yolo.round_budget.style,
-        continue_after_timeout = config.yolo.continue_after_timeout
+        continue_after_timeout = config.yolo.continue_after_timeout,
+        allow_refiner_stop = config.yolo.allow_refiner_stop,
+        verify_timeout_secs = config.yolo.verify_timeout_secs
     );
 }
 

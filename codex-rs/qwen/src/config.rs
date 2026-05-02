@@ -26,6 +26,8 @@ pub const DEFAULT_YOLO_ROUND_GOAL_MAX_TESTS: u32 = 3;
 pub const DEFAULT_YOLO_REFINER_MAX_PROMPT_CHARS: u32 = 3_000;
 pub const DEFAULT_YOLO_REFINER_STYLE: &str = "incremental";
 pub const DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT: bool = false;
+pub const DEFAULT_YOLO_ALLOW_REFINER_STOP: bool = false;
+pub const DEFAULT_YOLO_VERIFY_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedQwenConfig {
@@ -54,6 +56,9 @@ pub struct ResolvedYoloConfig {
     pub max_failures: u32,
     pub round_budget: ResolvedYoloRoundBudget,
     pub continue_after_timeout: bool,
+    pub allow_refiner_stop: bool,
+    pub verify_commands: Vec<String>,
+    pub verify_timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -187,7 +192,8 @@ impl ResolvedQwenConfig {
             env,
             "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS",
             Some("YOLO_DEFAULT_ITERATIONS"),
-        )?;
+        )?
+        .filter(|limit| *limit > 0);
         let round_timeout_secs = resolve_u64(
             overrides.yolo_round_timeout_secs,
             env,
@@ -253,6 +259,27 @@ impl ResolvedQwenConfig {
             None,
             DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT,
         )?;
+        let allow_refiner_stop = resolve_bool(
+            overrides.yolo_allow_refiner_stop,
+            env,
+            "QWEN_CODEX_YOLO_ALLOW_REFINER_STOP",
+            None,
+            DEFAULT_YOLO_ALLOW_REFINER_STOP,
+        )?;
+        let verify_commands = split_verify_commands(&resolve_string(
+            overrides.yolo_verify_commands.clone(),
+            env,
+            "QWEN_CODEX_YOLO_VERIFY_COMMANDS",
+            None,
+            "",
+        ));
+        let verify_timeout_secs = resolve_u64(
+            overrides.yolo_verify_timeout_secs,
+            env,
+            "QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS",
+            None,
+            DEFAULT_YOLO_VERIFY_TIMEOUT_SECS,
+        )?;
 
         Ok(Self {
             base_url,
@@ -276,6 +303,9 @@ impl ResolvedQwenConfig {
                 max_failures,
                 round_budget,
                 continue_after_timeout,
+                allow_refiner_stop,
+                verify_commands,
+                verify_timeout_secs,
             },
         })
     }
@@ -440,6 +470,47 @@ fn parse_bool(name: &str, value: &str) -> anyhow::Result<bool> {
     }
 }
 
+fn split_verify_commands(value: &str) -> Vec<String> {
+    let mut commands = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    for ch in value.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' if !in_single_quote => {
+                current.push(ch);
+                escaped = true;
+            }
+            '\'' if !in_double_quote => {
+                in_single_quote = !in_single_quote;
+                current.push(ch);
+            }
+            '"' if !in_single_quote => {
+                in_double_quote = !in_double_quote;
+                current.push(ch);
+            }
+            ';' if !in_single_quote && !in_double_quote => {
+                if let Some(command) = non_empty(current.clone()) {
+                    commands.push(command);
+                }
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    if let Some(command) = non_empty(current) {
+        commands.push(command);
+    }
+    commands
+}
+
 fn toml_string_literal(value: &str) -> String {
     let mut escaped = String::with_capacity(value.len() + 2);
     escaped.push('"');
@@ -588,6 +659,9 @@ mod tests {
                     style: DEFAULT_YOLO_REFINER_STYLE.to_string(),
                 },
                 continue_after_timeout: DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT,
+                allow_refiner_stop: DEFAULT_YOLO_ALLOW_REFINER_STOP,
+                verify_commands: Vec::new(),
+                verify_timeout_secs: DEFAULT_YOLO_VERIFY_TIMEOUT_SECS,
             }
         );
     }
@@ -619,6 +693,18 @@ mod tests {
                 "QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT".to_string(),
                 "true".to_string(),
             ),
+            (
+                "QWEN_CODEX_YOLO_ALLOW_REFINER_STOP".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_VERIFY_COMMANDS".to_string(),
+                "echo ok;sh -c 'exit 7'".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS".to_string(),
+                "9".to_string(),
+            ),
         ]);
 
         let config =
@@ -635,15 +721,52 @@ mod tests {
             }
         );
         assert!(config.yolo.continue_after_timeout);
+        assert!(config.yolo.allow_refiner_stop);
+        assert_eq!(
+            config.yolo.verify_commands,
+            vec!["echo ok".to_string(), "sh -c 'exit 7'".to_string()]
+        );
+        assert_eq!(config.yolo.verify_timeout_secs, 9);
     }
 
     #[test]
-    fn yolo_timeout_continue_is_disabled_by_default() {
+    fn yolo_safety_options_are_disabled_by_default() {
         let config =
             ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &HashMap::new())
                 .unwrap();
 
         assert!(!config.yolo.continue_after_timeout);
+        assert!(!config.yolo.allow_refiner_stop);
+        assert!(config.yolo.verify_commands.is_empty());
+        assert_eq!(
+            config.yolo.verify_timeout_secs,
+            DEFAULT_YOLO_VERIFY_TIMEOUT_SECS
+        );
+    }
+
+    #[test]
+    fn yolo_zero_iterations_means_unlimited() {
+        let env = HashMap::from([(
+            "QWEN_CODEX_YOLO_DEFAULT_ITERATIONS".to_string(),
+            "0".to_string(),
+        )]);
+
+        let config =
+            ResolvedQwenConfig::from_env_source(&QwenCliOverrides::default(), &env).unwrap();
+
+        assert_eq!(config.yolo.default_iterations, None);
+    }
+
+    #[test]
+    fn split_verify_commands_respects_basic_quotes() {
+        assert_eq!(
+            split_verify_commands("echo ok;sh -c 'echo a;b';curl -sf \"http://x?a=b;c=d\""),
+            vec![
+                "echo ok".to_string(),
+                "sh -c 'echo a;b'".to_string(),
+                "curl -sf \"http://x?a=b;c=d\"".to_string(),
+            ]
+        );
     }
 
     #[test]

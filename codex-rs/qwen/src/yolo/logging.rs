@@ -123,7 +123,20 @@ fn run_markdown(run: &YoloRunLog) -> String {
         "- Continue after timeout: `{}`\n",
         run.continue_after_timeout
     ));
+    out.push_str(&format!(
+        "- Allow refiner stop: `{}`\n",
+        run.allow_refiner_stop
+    ));
+    out.push_str(&format!(
+        "- External verification timeout: `{}s`\n",
+        run.verify_timeout_secs
+    ));
     out.push_str(&format!("- Stop reason: `{:?}`\n\n", run.stop_reason));
+    list_section(
+        &mut out,
+        "External Verification Commands",
+        &run.verify_commands,
+    );
     out.push_str("## Original Prompt\n\n");
     out.push_str(&run.original_prompt);
     out.push_str("\n\n## Iterations\n\n");
@@ -179,6 +192,7 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
         "Commands And Tests",
         &iteration.commands_tests_run,
     );
+    external_verification_section(&mut out, &iteration.external_verification);
     list_section(&mut out, "Errors", &iteration.errors);
     section(&mut out, "Git Status", &iteration.current_git_status);
     section(&mut out, "Git Diff Summary", &iteration.git_diff_summary);
@@ -218,6 +232,27 @@ fn list_section(out: &mut String, title: &str, values: &[String]) {
     out.push('\n');
 }
 
+fn external_verification_section(
+    out: &mut String,
+    values: &[crate::yolo::types::ExternalVerificationResult],
+) {
+    out.push_str("## External Verification\n\n");
+    if values.is_empty() {
+        out.push_str("- None\n\n");
+        return;
+    }
+    for value in values {
+        out.push_str(&format!(
+            "- `{}` exitCode=`{:?}` durationMs=`{}` output=`{}`\n",
+            value.command.replace('`', "'"),
+            value.exit_code,
+            value.duration_ms,
+            value.output.replace('`', "'")
+        ));
+    }
+    out.push('\n');
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -244,6 +279,7 @@ mod tests {
             git_diff_summary: String::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
+            external_verification: Vec::new(),
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -296,6 +332,7 @@ mod tests {
             git_diff_summary: String::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
+            external_verification: Vec::new(),
             current_git_status: String::new(),
             interrupt_received: true,
             timeout_occurred: false,

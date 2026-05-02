@@ -26,6 +26,9 @@ pub struct QwenCliOverrides {
     pub yolo_refiner_max_prompt_chars: Option<u32>,
     pub yolo_refiner_style: Option<String>,
     pub yolo_continue_after_timeout: Option<bool>,
+    pub yolo_allow_refiner_stop: Option<bool>,
+    pub yolo_verify_commands: Option<String>,
+    pub yolo_verify_timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +196,13 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
                 "--yolo-refiner-style",
                 &mut overrides.yolo_refiner_style,
             )?
+            || consume_string_flag(
+                &args,
+                &mut index,
+                arg,
+                "--yolo-verify-commands",
+                &mut overrides.yolo_verify_commands,
+            )?
         {
             continue;
         }
@@ -214,6 +224,12 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--yolo-round-timeout-secs",
             &mut overrides.yolo_round_timeout_secs,
+        )? || consume_u64_flag(
+            &args,
+            &mut index,
+            arg,
+            "--yolo-verify-timeout-secs",
+            &mut overrides.yolo_verify_timeout_secs,
         )? {
             continue;
         }
@@ -279,6 +295,11 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--yolo-continue-after-timeout",
             &mut overrides.yolo_continue_after_timeout,
+        )? || consume_bool_flag(
+            &mut index,
+            arg,
+            "--yolo-allow-refiner-stop",
+            &mut overrides.yolo_allow_refiner_stop,
         )? {
             continue;
         }
@@ -586,6 +607,11 @@ mod tests {
             "--yolo-refiner-style".to_string(),
             "incremental".to_string(),
             "--yolo-continue-after-timeout=true".to_string(),
+            "--yolo-allow-refiner-stop".to_string(),
+            "--yolo-verify-commands".to_string(),
+            "echo ok;sh -c 'exit 7'".to_string(),
+            "--yolo-verify-timeout-secs".to_string(),
+            "9".to_string(),
             "Improve".to_string(),
         ])
         .unwrap();
@@ -599,6 +625,12 @@ mod tests {
             Some("incremental".to_string())
         );
         assert_eq!(parsed.overrides.yolo_continue_after_timeout, Some(true));
+        assert_eq!(parsed.overrides.yolo_allow_refiner_stop, Some(true));
+        assert_eq!(
+            parsed.overrides.yolo_verify_commands,
+            Some("echo ok;sh -c 'exit 7'".to_string())
+        );
+        assert_eq!(parsed.overrides.yolo_verify_timeout_secs, Some(9));
     }
 
     #[test]

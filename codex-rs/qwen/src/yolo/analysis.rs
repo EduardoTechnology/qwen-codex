@@ -6,6 +6,7 @@ use serde::Deserialize;
 use serde::Serialize;
 
 use crate::yolo::agent::tail;
+use crate::yolo::types::ExternalVerificationResult;
 use crate::yolo::types::RefinerSkippedReason;
 use crate::yolo::types::RoundBudget;
 use crate::yolo::types::YoloRunLog;
@@ -25,6 +26,9 @@ pub(crate) struct YoloRunAnalysis {
     pub iteration_limit: Option<u32>,
     pub round_budget: RoundBudget,
     pub continue_after_timeout: bool,
+    pub allow_refiner_stop: bool,
+    pub verify_commands: Vec<String>,
+    pub verify_timeout_secs: u64,
     pub completed_iterations: usize,
     pub stop_reason: Option<YoloStopReason>,
     pub final_status: String,
@@ -47,6 +51,7 @@ pub(crate) struct YoloRoundAnalysis {
     pub files_changed: Vec<String>,
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
+    pub external_verification: Vec<ExternalVerificationResult>,
     pub refiner_was_called: bool,
     pub refiner_response_preview: Option<String>,
     pub next_prompt_preview: Option<String>,
@@ -118,6 +123,7 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
                 files_changed: iteration.changed_files.clone(),
                 commands_tests_run: iteration.commands_tests_run.clone(),
                 errors: iteration.errors.clone(),
+                external_verification: iteration.external_verification.clone(),
                 refiner_was_called: iteration.refiner_raw_response.is_some(),
                 refiner_response_preview: iteration.refiner_raw_response.as_deref().map(preview),
                 next_prompt_preview: iteration
@@ -154,6 +160,9 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
         iteration_limit: run.iteration_limit,
         round_budget: run.round_budget.clone(),
         continue_after_timeout: run.continue_after_timeout,
+        allow_refiner_stop: run.allow_refiner_stop,
+        verify_commands: run.verify_commands.clone(),
+        verify_timeout_secs: run.verify_timeout_secs,
         completed_iterations: run.iterations.len(),
         stop_reason: run.stop_reason.clone(),
         final_status: final_status(run).to_string(),
@@ -182,11 +191,13 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         analysis.completed_iterations
     ));
     out.push_str("## Rounds\n\n");
-    out.push_str("| Round | Status | Refiner | Prompt validation | Files | Errors |\n");
-    out.push_str("| --- | --- | --- | --- | --- | --- |\n");
+    out.push_str(
+        "| Round | Status | Refiner | Prompt validation | External checks | Files | Errors |\n",
+    );
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
     for round in &analysis.rounds {
         out.push_str(&format!(
-            "| {} | {:?} | {} | {} | {} | {} |\n",
+            "| {} | {:?} | {} | {} | {} | {} | {} |\n",
             round.iteration,
             round.stop_reason,
             if round.refiner_was_called {
@@ -195,20 +206,31 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
                 "no"
             },
             validation_status(round),
+            verification_status(round),
             round.files_changed.len(),
             round.errors.len()
         ));
     }
     out.push_str("\n## Round Budget\n\n");
     out.push_str(&format!(
-        "- Style: `{}`\n- Max files per round: `{}`\n- Max actions per round: `{}`\n- Max verification commands per round: `{}`\n- Max next prompt chars: `{}`\n- Continue after timeout: `{}`\n",
+        "- Style: `{}`\n- Max files per round: `{}`\n- Max actions per round: `{}`\n- Max verification commands per round: `{}`\n- Max next prompt chars: `{}`\n- Continue after timeout: `{}`\n- Allow refiner stop: `{}`\n",
         analysis.round_budget.style,
         analysis.round_budget.max_files,
         analysis.round_budget.max_actions,
         analysis.round_budget.max_tests,
         analysis.round_budget.max_next_prompt_chars,
-        analysis.continue_after_timeout
+        analysis.continue_after_timeout,
+        analysis.allow_refiner_stop
     ));
+    out.push_str(&format!(
+        "- External verification timeout: `{}s`\n",
+        analysis.verify_timeout_secs
+    ));
+    list(
+        &mut out,
+        "External verification commands",
+        &analysis.verify_commands,
+    );
     out.push_str("\n## Round Chaining\n\n");
     out.push_str(&format!(
         "- Checked: `{}`\n- All inputs matched previous nextPrompt: `{}`\n",
@@ -461,6 +483,22 @@ fn validation_status(round: &YoloRoundAnalysis) -> String {
     }
 }
 
+fn verification_status(round: &YoloRoundAnalysis) -> String {
+    if round.external_verification.is_empty() {
+        return "not configured".to_string();
+    }
+    let failures = round
+        .external_verification
+        .iter()
+        .filter(|result| result.exit_code != Some(0))
+        .count();
+    if failures == 0 {
+        format!("{} passed", round.external_verification.len())
+    } else {
+        format!("{failures}/{} failed", round.external_verification.len())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -484,6 +522,7 @@ mod tests {
             git_diff_summary: String::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
+            external_verification: Vec::new(),
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -514,6 +553,9 @@ mod tests {
             model: "qwen35-local".to_string(),
             iteration_limit: Some(2),
             round_budget: RoundBudget::default(),
+            allow_refiner_stop: false,
+            verify_commands: Vec::new(),
+            verify_timeout_secs: 15,
             continue_after_timeout: false,
             max_repeated_prompts: 3,
             max_failures: 3,

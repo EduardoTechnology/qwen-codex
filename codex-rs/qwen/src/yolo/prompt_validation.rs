@@ -61,6 +61,9 @@ fn validate_next_prompt(prompt: &str, previous_prompt: &str, budget: &RoundBudge
     if !has_acceptance_or_verification(trimmed) {
         issues.push("next prompt lacks acceptance criteria or verification commands".to_string());
     }
+    if is_yolo_stop_like(trimmed) {
+        issues.push("refiner attempted YOLO_STOP, which is disabled by default".to_string());
+    }
     if let Some(phrase) = broad_phrase(trimmed) {
         issues.push(format!("next prompt is too broad: {phrase}"));
     }
@@ -74,6 +77,9 @@ fn validate_next_prompt(prompt: &str, previous_prompt: &str, budget: &RoundBudge
 }
 
 fn repair_next_prompt(prompt: &str, budget: &RoundBudget) -> String {
+    if is_yolo_stop_like(prompt) {
+        return focused_continue_prompt(budget);
+    }
     let max_chars = budget.max_next_prompt_chars as usize;
     let detail_limit = max_chars.saturating_sub(1_500).clamp(120, 1_200);
     let details = sanitize_broad_phrases(&tail(prompt, detail_limit));
@@ -148,6 +154,40 @@ Stop after completing this scoped task and summarizing verification."#,
     repaired
 }
 
+fn focused_continue_prompt(budget: &RoundBudget) -> String {
+    format!(
+        r#"Title:
+Verify and improve the most important remaining acceptance criterion.
+
+Context:
+The refiner attempted to stop, but YOLO is configured to exhaust the requested iterations. Continue by checking the latest round output and external verification results for the most important remaining blocker.
+
+Task:
+Fix one concrete blocker or missing acceptance criterion from the latest round. If external verification failed, target that failure first.
+
+Constraints:
+- Modify at most {max_files} files.
+- Use at most {max_actions} concrete actions.
+- Run at most {max_tests} verification commands.
+- Do not broaden scope or add unrelated features.
+
+Acceptance criteria:
+- One remaining acceptance criterion is verified or improved.
+- Any relevant external verification failure is addressed.
+- The verification commands below are run and summarized.
+
+Verification commands:
+- git status --short
+- Run the smallest relevant runtime, build, or config check for the changed area.
+
+Stop condition:
+Stop this agent round after the scoped fix is complete and verification is summarized."#,
+        max_files = budget.max_files,
+        max_actions = budget.max_actions,
+        max_tests = budget.max_tests
+    )
+}
+
 fn has_clear_objective(prompt: &str) -> bool {
     let lower = prompt.to_ascii_lowercase();
     lower.contains("title:") || lower.contains("objective:") || lower.contains("next step:")
@@ -177,6 +217,13 @@ fn broad_phrase(prompt: &str) -> Option<&'static str> {
     ]
     .into_iter()
     .find(|phrase| lower.contains(phrase))
+}
+
+fn is_yolo_stop_like(prompt: &str) -> bool {
+    prompt
+        .trim_start()
+        .to_ascii_uppercase()
+        .starts_with("YOLO_STOP")
 }
 
 fn sanitize_broad_phrases(value: &str) -> String {
@@ -329,6 +376,25 @@ Stop after the verification commands are run and summarized."#
                 .issues
                 .iter()
                 .any(|issue| issue.contains("too similar"))
+        );
+    }
+
+    #[test]
+    fn yolo_next_prompt_validation_repairs_stop_signal_by_default() {
+        let result = validate_and_repair_next_prompt("YOLO_STOP", "previous", &budget());
+
+        assert!(result.passed);
+        assert!(result.repaired);
+        assert!(
+            result
+                .issues
+                .iter()
+                .any(|issue| issue.contains("YOLO_STOP"))
+        );
+        assert!(
+            result
+                .prompt
+                .contains("Verify and improve the most important remaining acceptance criterion")
         );
     }
 }

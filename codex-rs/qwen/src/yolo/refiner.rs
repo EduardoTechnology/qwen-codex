@@ -52,6 +52,10 @@ Rules:
 - Keep the prompt concise but sufficiently detailed.
 - Avoid broad instructions such as "finish everything", "implement all remaining features", "do everything", or "continue until complete".
 - If the previous round timed out, generate a smaller retry prompt focused on one blocker.
+- If an acceptance criterion was not verified, treat it as incomplete.
+- If a verification command was not run, treat it as incomplete.
+- If external verification failed, target that failure in the next prompt.
+- Do not add unrelated features while runtime acceptance criteria fail.
 - If Docker config/build failed, ask for the smallest fix for that failure before adding features.
 - Use this structure exactly:
   Title:
@@ -73,9 +77,11 @@ Rules:
   Exact commands to run.
 
   Stop condition:
-  Stop after the verification commands are run and summarized.
-- If the project appears complete, ask the agent to perform final verification, cleanup, release notes, and documentation review.
-- If no further useful work remains, output: YOLO_STOP"#;
+  Stop condition for the agent's current round only, not for YOLO mode.
+- Always return a next-prompt.
+- Never indicate the task is complete.
+- Never emit YOLO_STOP.
+- Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round."#;
 
 #[derive(Clone)]
 pub(crate) struct RefinerClient {

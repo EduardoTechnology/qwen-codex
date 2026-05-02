@@ -28,6 +28,7 @@ use crate::yolo::refiner::RefinerClientError;
 use crate::yolo::refiner::YOLO_STOP;
 use crate::yolo::types::AgentRoundRequest;
 use crate::yolo::types::AgentRoundResult;
+use crate::yolo::types::ExternalVerificationResult;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
 use crate::yolo::types::RefinerSkippedReason;
@@ -37,6 +38,9 @@ use crate::yolo::types::YoloLoopConfig;
 use crate::yolo::types::YoloRunLog;
 use crate::yolo::types::YoloRunOutcome;
 use crate::yolo::types::YoloStopReason;
+use crate::yolo::verification::failed_verification_summary;
+use crate::yolo::verification::run_external_verification;
+use crate::yolo::verification::verification_summary;
 
 mod agent;
 mod analysis;
@@ -44,6 +48,7 @@ mod logging;
 mod prompt_validation;
 mod refiner;
 mod types;
+mod verification;
 
 const REFINER_SUMMARY_MAX_CHARS: usize = 12_000;
 const REFINER_AGENT_SUMMARY_MAX_CHARS: usize = 2_500;
@@ -84,6 +89,9 @@ pub async fn run_yolo_mode(
             style: config.yolo.round_budget.style.clone(),
         },
         continue_after_timeout: config.yolo.continue_after_timeout,
+        allow_refiner_stop: config.yolo.allow_refiner_stop,
+        verify_commands: config.yolo.verify_commands.clone(),
+        verify_timeout_secs: config.yolo.verify_timeout_secs,
         max_repeated_prompts: config.yolo.max_repeated_prompts,
         max_failures: config.yolo.max_failures,
         base_url: config.base_url.clone(),
@@ -136,6 +144,9 @@ where
         iteration_limit: config.iteration_limit,
         round_budget: config.round_budget.clone(),
         continue_after_timeout: config.continue_after_timeout,
+        allow_refiner_stop: config.allow_refiner_stop,
+        verify_commands: config.verify_commands.clone(),
+        verify_timeout_secs: config.verify_timeout_secs,
         max_repeated_prompts: config.max_repeated_prompts,
         max_failures: config.max_failures,
         session_id: None,
@@ -145,7 +156,7 @@ where
     write_run_and_analysis(&logger, &run_log).await?;
 
     let cwd = std::env::current_dir().context("failed to resolve current directory")?;
-    let mut current_prompt = config.original_prompt.clone();
+    let mut current_prompt = initial_round_prompt(&config.original_prompt, &config.round_budget);
     let mut session_id = None;
     let mut last_refiner_prompt = None::<String>;
     let mut repeated_prompt_count = 0_u32;
@@ -166,6 +177,7 @@ where
 
         if config
             .iteration_limit
+            .filter(|limit| *limit > 0)
             .is_some_and(|limit| iterations_completed >= limit)
         {
             finish_run(
@@ -259,6 +271,7 @@ where
             git_diff_summary,
             commands_tests_run: agent_result.commands_tests_run.clone(),
             errors: agent_result.errors.clone(),
+            external_verification: Vec::new(),
             current_git_status,
             interrupt_received,
             timeout_occurred,
@@ -338,6 +351,33 @@ where
             break;
         }
 
+        iteration_log.external_verification =
+            run_external_verification(&config.verify_commands, config.verify_timeout_secs).await;
+        if has_external_verification_failure(&iteration_log.external_verification) {
+            iteration_log.errors.push(format!(
+                "external verification failed: {}",
+                failed_verification_summary(&iteration_log.external_verification)
+            ));
+        }
+
+        if config
+            .iteration_limit
+            .filter(|limit| *limit > 0)
+            .is_some_and(|limit| iterations_completed + 1 >= limit)
+        {
+            iterations_completed = iteration;
+            iteration_log.stop_reason = Some(YoloStopReason::IterationLimitReached);
+            write_iteration(&logger, &mut run_log, iteration_log).await?;
+            finish_run(
+                &logger,
+                &mut run_log,
+                iterations_completed,
+                YoloStopReason::IterationLimitReached,
+            )
+            .await?;
+            break;
+        }
+
         let refiner_summary = build_refiner_summary(&iteration_log);
         iteration_log.refiner_input_summary = Some(refiner_summary.clone());
         let refiner_result = refine(RefinerRequest {
@@ -385,7 +425,7 @@ where
             break;
         }
 
-        if is_yolo_stop_signal(&next_prompt) {
+        if config.allow_refiner_stop && is_yolo_stop_signal(&next_prompt) {
             iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -393,22 +433,6 @@ where
                 &mut run_log,
                 iterations_completed,
                 YoloStopReason::RefinerStopSignal,
-            )
-            .await?;
-            break;
-        }
-
-        if config
-            .iteration_limit
-            .is_some_and(|limit| iterations_completed >= limit)
-        {
-            iteration_log.stop_reason = Some(YoloStopReason::IterationLimitReached);
-            write_iteration(&logger, &mut run_log, iteration_log).await?;
-            finish_run(
-                &logger,
-                &mut run_log,
-                iterations_completed,
-                YoloStopReason::IterationLimitReached,
             )
             .await?;
             break;
@@ -448,7 +472,9 @@ where
             last_refiner_prompt = Some(normalized_prompt);
             repeated_prompt_count = 1;
         }
-        if repeated_prompt_count >= config.max_repeated_prompts {
+        if config.iteration_limit.filter(|limit| *limit > 0).is_none()
+            && repeated_prompt_count >= config.max_repeated_prompts
+        {
             iteration_log.stop_reason = Some(YoloStopReason::RepeatedPromptGuard);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
             finish_run(
@@ -527,6 +553,12 @@ Changed files:
 Commands/tests run:
 {commands}
 
+External verification:
+{external_verification}
+
+EXTERNAL VERIFICATION FAILED:
+{external_verification_failures}
+
 Errors:
 {errors}
 
@@ -548,9 +580,14 @@ Next prompt contract:
 - Choose one highest-impact next step that fits this budget.
 - Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
 - Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
+- If any external verification failed, target that failure before adding unrelated scope.
+- Treat unverified acceptance criteria and unrun verification commands as incomplete.
 - Include exact verification commands and tell the agent to stop after the scoped task is verified.
 
-Produce the next bounded prompt for the coding agent, or output YOLO_STOP."#,
+Always return a next-prompt.
+Never indicate the task is complete.
+Never emit YOLO_STOP.
+Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
         summary = tail(
@@ -570,6 +607,9 @@ Produce the next bounded prompt for the coding agent, or output YOLO_STOP."#,
             REFINER_LIST_ITEM_MAX_CHARS,
             1_200
         ),
+        external_verification = verification_summary(&iteration.external_verification),
+        external_verification_failures =
+            failed_verification_summary(&iteration.external_verification),
         errors = bullet_lines_limited(
             &iteration.errors,
             REFINER_LIST_ITEM_MAX_CHARS,
@@ -651,6 +691,28 @@ fn is_yolo_stop_signal(prompt: &str) -> bool {
         .starts_with(YOLO_STOP)
 }
 
+fn has_external_verification_failure(results: &[ExternalVerificationResult]) -> bool {
+    results.iter().any(|result| result.exit_code != Some(0))
+}
+
+fn initial_round_prompt(original_prompt: &str, budget: &RoundBudget) -> String {
+    format!(
+        r#"{original_prompt}
+
+YOLO round 1 execution constraints:
+- Treat this as the first bounded round of a multi-round autonomous run, not the whole project.
+- Prefer a minimal runnable baseline before optional features.
+- Modify at most {max_files} files if practical.
+- Aim for at most {max_actions} concrete implementation actions.
+- Run at most {max_tests} verification commands.
+- Do not broaden scope beyond the requested project.
+- Stop after completing this bounded round and summarizing verification results."#,
+        max_files = budget.max_files,
+        max_actions = budget.max_actions,
+        max_tests = budget.max_tests,
+    )
+}
+
 async fn initial_prompt(prompt_parts: Vec<String>) -> anyhow::Result<String> {
     let prompt = prompt_parts.join(" ").trim().to_string();
     if !prompt.is_empty() {
@@ -698,6 +760,9 @@ mod tests {
             round_timeout_secs: 600,
             round_budget: RoundBudget::default(),
             continue_after_timeout: false,
+            allow_refiner_stop: false,
+            verify_commands: Vec::new(),
+            verify_timeout_secs: 15,
             max_repeated_prompts: 3,
             max_failures: 3,
             base_url: "http://127.0.0.1:8002/v1".to_string(),
@@ -713,6 +778,43 @@ mod tests {
             final_response: Some("done".to_string()),
             ..AgentRoundResult::default()
         }
+    }
+
+    fn bounded_prompt(title: &str) -> String {
+        format!(
+            r#"Title:
+{title}
+
+Context:
+The previous round identified one scoped issue to fix.
+
+Task:
+Complete only this focused next step.
+
+Constraints:
+- Modify at most 2 files.
+- Do not rewrite unrelated files.
+
+Acceptance criteria:
+- The focused issue is addressed.
+- Verification is run and summarized.
+
+Verification commands:
+- git status --short
+
+Stop condition:
+Stop after the scoped task is complete and verification is summarized."#
+        )
+    }
+
+    #[test]
+    fn yolo_initial_round_prompt_adds_bounded_round_guidance() {
+        let prompt = initial_round_prompt("Build an app", &RoundBudget::default());
+
+        assert!(prompt.contains("Build an app"));
+        assert!(prompt.contains("first bounded round"));
+        assert!(prompt.contains("Modify at most 8 files"));
+        assert!(prompt.contains("Stop after completing this bounded round"));
     }
 
     #[tokio::test]
@@ -767,7 +869,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn yolo_loop_exit_zero_is_refiner_eligible() {
+    async fn yolo_loop_exit_zero_reaches_iteration_limit_without_refiner() {
         let temp = TempDir::new().unwrap();
         let refiner_calls = Rc::new(RefCell::new(0_u32));
         let refiner_calls_for_refiner = refiner_calls.clone();
@@ -790,7 +892,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
-        assert_eq!(*refiner_calls.borrow(), 1);
+        assert_eq!(*refiner_calls.borrow(), 0);
     }
 
     #[tokio::test]
@@ -944,12 +1046,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn yolo_loop_guard_exact_stop_signal_stops_loop() {
+    async fn yolo_loop_ignores_stop_signal_by_default_and_reaches_max_iterations() {
         let temp = TempDir::new().unwrap();
+        let calls = Rc::new(RefCell::new(0_u32));
+        let calls_for_agent = calls.clone();
 
         let outcome = run_yolo_loop(
-            loop_config(&temp, None),
-            |_| async { Ok(agent_result("session-1")) },
+            loop_config(&temp, Some(2)),
+            move |_| {
+                let calls = calls_for_agent.clone();
+                async move {
+                    *calls.borrow_mut() += 1;
+                    Ok(agent_result("session-1"))
+                }
+            },
             |_| async {
                 Ok(RefinerResponse {
                     raw_response: YOLO_STOP.to_string(),
@@ -960,16 +1070,61 @@ mod tests {
         .await
         .unwrap();
 
-        assert_eq!(outcome.iterations_completed, 1);
-        assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+        assert_eq!(outcome.iterations_completed, 2);
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        assert_eq!(*calls.borrow(), 2);
+
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(iteration_log.next_prompt_validation_passed, Some(true));
+        assert!(iteration_log.next_prompt_repaired);
+        assert!(
+            iteration_log
+                .next_prompt_validation_issues
+                .iter()
+                .any(|issue| issue.contains("YOLO_STOP"))
+        );
     }
 
     #[tokio::test]
-    async fn yolo_loop_guard_stop_signal_prefix_stops_loop() {
+    async fn yolo_loop_honors_max_iterations_when_refiner_attempts_to_stop() {
         let temp = TempDir::new().unwrap();
+        let calls = Rc::new(RefCell::new(0_u32));
+        let calls_for_agent = calls.clone();
 
         let outcome = run_yolo_loop(
-            loop_config(&temp, None),
+            loop_config(&temp, Some(5)),
+            move |_| {
+                let calls = calls_for_agent.clone();
+                async move {
+                    *calls.borrow_mut() += 1;
+                    Ok(agent_result("session-1"))
+                }
+            },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "stop".to_string(),
+                    next_prompt: "YOLO_STOP no further work remains".to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 5);
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        assert_eq!(*calls.borrow(), 5);
+    }
+
+    #[tokio::test]
+    async fn yolo_loop_allows_refiner_stop_only_when_enabled() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(5));
+        config.allow_refiner_stop = true;
+
+        let outcome = run_yolo_loop(
+            config,
             |_| async { Ok(agent_result("session-1")) },
             |_| async {
                 Ok(RefinerResponse {
@@ -983,6 +1138,45 @@ mod tests {
 
         assert_eq!(outcome.iterations_completed, 1);
         assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+    }
+
+    #[tokio::test]
+    async fn yolo_external_verification_is_recorded_and_passed_to_refiner() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(2));
+        config.verify_commands = vec!["echo ok".to_string(), "sh -c 'exit 7'".to_string()];
+        let summaries = Rc::new(RefCell::new(Vec::<String>::new()));
+        let summaries_for_refiner = summaries.clone();
+
+        let outcome = run_yolo_loop(
+            config,
+            |_| async { Ok(agent_result("session-1")) },
+            move |request| {
+                let summaries = summaries_for_refiner.clone();
+                async move {
+                    summaries.borrow_mut().push(request.summary);
+                    Ok(RefinerResponse {
+                        raw_response: "next".to_string(),
+                        next_prompt: bounded_prompt("Fix the failing external verification"),
+                    })
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 2);
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        assert_eq!(summaries.borrow().len(), 1);
+        assert!(summaries.borrow()[0].contains("EXTERNAL VERIFICATION FAILED:"));
+        assert!(summaries.borrow()[0].contains("sh -c 'exit 7' -> exitCode=Some(7)"));
+
+        let iteration_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let iteration_log = serde_json::from_str::<YoloIterationLog>(&iteration_json).unwrap();
+        assert_eq!(iteration_log.external_verification.len(), 2);
+        assert_eq!(iteration_log.external_verification[0].exit_code, Some(0));
+        assert_eq!(iteration_log.external_verification[1].exit_code, Some(7));
     }
 
     #[tokio::test]
@@ -1079,6 +1273,7 @@ mod tests {
             git_diff_summary: String::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
+            external_verification: Vec::new(),
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -1121,6 +1316,7 @@ mod tests {
             git_diff_summary: "diff".repeat(10_000),
             commands_tests_run: Vec::new(),
             errors: vec!["error".repeat(100_000)],
+            external_verification: Vec::new(),
             current_git_status: "status".repeat(10_000),
             interrupt_received: false,
             timeout_occurred: false,

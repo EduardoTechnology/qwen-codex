@@ -13,6 +13,9 @@ pub(crate) struct YoloLoopConfig {
     pub round_timeout_secs: u64,
     pub round_budget: RoundBudget,
     pub continue_after_timeout: bool,
+    pub allow_refiner_stop: bool,
+    pub verify_commands: Vec<String>,
+    pub verify_timeout_secs: u64,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
     pub base_url: String,
@@ -77,6 +80,15 @@ pub(crate) struct RefinerResponse {
     pub next_prompt: String,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ExternalVerificationResult {
+    pub command: String,
+    pub exit_code: Option<i32>,
+    pub output: String,
+    pub duration_ms: u128,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RefinerFailureDiagnostic {
@@ -93,6 +105,7 @@ pub(crate) struct RefinerFailureDiagnostic {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum YoloStopReason {
+    #[serde(rename = "max_iterations")]
     IterationLimitReached,
     RefinerStopSignal,
     RepeatedPromptGuard,
@@ -134,6 +147,9 @@ pub(crate) struct YoloRunLog {
     pub iteration_limit: Option<u32>,
     pub round_budget: RoundBudget,
     pub continue_after_timeout: bool,
+    pub allow_refiner_stop: bool,
+    pub verify_commands: Vec<String>,
+    pub verify_timeout_secs: u64,
     pub max_repeated_prompts: u32,
     pub max_failures: u32,
     pub session_id: Option<String>,
@@ -159,6 +175,7 @@ pub(crate) struct YoloIterationLog {
     pub git_diff_summary: String,
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
+    pub external_verification: Vec<ExternalVerificationResult>,
     pub current_git_status: String,
     pub interrupt_received: bool,
     pub timeout_occurred: bool,
