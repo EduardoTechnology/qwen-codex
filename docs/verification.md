@@ -398,6 +398,67 @@ Conclusion:
 - The live ecommerce run did not satisfy the desired `completedIterations=5` / `stopReason=max_iterations` acceptance result because the local Qwen agent timed out during round 2. This is now logged honestly as `round_timeout`, not as a refiner stop or interruption.
 - Remaining product work: improve agent-round completion behavior for larger generated-app tasks, or provide a user-visible mode to continue after timeout when the partially completed round created useful files.
 
+## YOLO Acceptance-Gated Ecommerce Verification
+
+Primary six-round run:
+
+- Workspace: `/tmp/qwen-yolo-ecommerce`
+- Run directory: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260502T093942Z-105960`
+- Command shape: `qwen-codex --yolo-refiner --iterations 6 --yolo-round-timeout-secs 1200 --yolo-acceptance-gate --yolo-acceptance-command "docker compose config" --yolo-acceptance-command "docker compose build" --yolo-acceptance-command "<docker compose up/curl/down check>" --dangerously-bypass-approvals-and-sandbox "<incremental ecommerce prompt>"`
+- JSON validity: `PASS`; `run.json`, `analysis.json`, and all iteration JSON files parsed.
+- Completed iterations: `6`.
+- Stop reason: `max_iterations`.
+- Final status in that run: `success`.
+- Round chaining: `PASS`; every continued round input matched the previous `nextPrompt`.
+- Secret redaction: `PASS`; no `local-dev-key` or `authorization:` header text appeared in logs.
+- Refiner stop signal: none observed in this run.
+- Acceptance gate: enabled. Because the refiner did not emit `YOLO_STOP`, acceptance commands were not triggered during the primary run. This exposed a final-status gap, so Qwen Codex now also runs acceptance commands before a fixed-iteration `max_iterations` stop when the acceptance gate is enabled.
+
+Round summary:
+
+| Round | Duration | Agent result | Refiner result | Diagnostics |
+| --- | ---: | --- | --- | --- |
+| 1 | 145s | Created backend/frontend directories and compose scaffold. | Asked to fix Docker build/runtime. | Actions captured, no stop signal. |
+| 2 | 1171s | Performed a large Docker/runtime fix round and added README. | Prompt was repaired because it was too similar/broad. | Long but completed before 1200s timeout. |
+| 3 | 55s | Continued runtime fixes. | Asked to fix backend/frontend reachability. | Chained correctly. |
+| 4 | 20s | No new captured commands, but existing changed files remained in git diff. | Prompt was repaired as scoped blocker work. | Not classified as no-action because files were still changed. |
+| 5 | 151s | Ran more Docker/runtime work. | Asked for final Docker build/runtime blocker verification. | Chained correctly. |
+| 6 | 16s | Final agent round completed. | Refiner skipped because iteration limit was reached. | Stopped with `max_iterations`. |
+
+Manual project verification after the six-round run:
+
+- Root `README.md`: present.
+- `docker-compose.yml`: present.
+- Services: backend, frontend, mongo.
+- Host ports: frontend `2225`, backend `2226`, mongo internal-only via `expose: ["27017"]`.
+- Browser-unreachable `http://backend:8000`: `PASS`; not found in generated files.
+- `docker compose config`: `PASS`.
+- `docker compose build`: `PASS`.
+- `curl -fsS http://localhost:2226/health`: `PASS`, returned `{"status":"ok"}`.
+- `curl -fsS http://localhost:2226/api/products`: `PASS`, returned a JSON product array.
+- `curl -fsS http://localhost:2225 | grep -i product`: `PASS`, returned product HTML.
+- Cleanup: `docker compose down` was run after verification.
+
+Supplemental final-acceptance smoke after tightening `max_iterations` behavior:
+
+- Run directory: `/tmp/qwen-yolo-ecommerce/.qwen-codex/yolo-runs/20260502T102028Z-198783`
+- Command shape: one-iteration YOLO run over the generated ecommerce workspace with the same three acceptance commands.
+- Stop reason: `max_iterations`.
+- Final status: `success`.
+- Completed iterations: `1`.
+- Acceptance results: `PASS`; three commands were recorded as exactly three results, including the compound `docker compose up -d && ... && docker compose down` command as one command.
+- JSON validity: `PASS`; `run.json`, `analysis.json`, and `iteration-001.json` parsed.
+- Secret redaction: inherited from the same log redaction path; no secrets observed in the primary run.
+
+Conclusion:
+
+- Acceptance gating is implemented and tested.
+- `YOLO_STOP` is rejected when acceptance commands fail.
+- Failed acceptance output is converted into a repair prompt.
+- Fixed-iteration runs now execute final acceptance checks before reporting success when the gate is enabled.
+- The ecommerce project from this run is small but actually runnable.
+- Remaining limitation: the main six-round run did not exercise a rejected `YOLO_STOP` in live mode because the refiner never emitted a stop signal; that path is covered by unit tests.
+
 ## Context Management
 
 Status: `CONFIG-PROPAGATION-CONFIRMED-BUT-LONG-RUN-NOT-STRESS-TESTED`.

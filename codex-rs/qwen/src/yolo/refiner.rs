@@ -55,8 +55,11 @@ Rules:
 - If an acceptance criterion was not verified, treat it as incomplete.
 - If a verification command was not run, treat it as incomplete.
 - If external verification failed, target that failure in the next prompt.
+- If acceptance-gate checks failed or are missing, target that failure in the next prompt.
 - Do not add unrelated features while runtime acceptance criteria fail.
 - If Docker config/build failed, ask for the smallest fix for that failure before adding features.
+- For Docker/web projects, frontend HTTP 500, backend health failure, products endpoint failure, Docker build failure, Docker Compose config failure, missing README/run instructions, missing required endpoints, and browser-unreachable service hostnames are blockers.
+- Browser JavaScript running on the host cannot fetch http://backend:8000. Use a host-reachable URL such as http://localhost:2226, a relative/proxy URL, or documented environment configuration.
 - Use this structure exactly:
   Title:
   One concise objective.
@@ -78,10 +81,9 @@ Rules:
 
   Stop condition:
   Stop condition for the agent's current round only, not for YOLO mode.
-- Always return a next-prompt.
-- Never indicate the task is complete.
-- Never emit YOLO_STOP.
-- Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round."#;
+- Emit YOLO_STOP only when the original goal, explicit acceptance criteria, verification commands, and acceptance-gate checks are known to have passed and there are no known runtime failures or TODO blockers.
+- If acceptance-gate results are missing, failed, or disabled, return a focused next-prompt instead of YOLO_STOP.
+- Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless acceptance evidence proves the project is complete."#;
 
 #[derive(Clone)]
 pub(crate) struct RefinerClient {

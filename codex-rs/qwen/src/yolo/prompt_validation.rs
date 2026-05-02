@@ -24,7 +24,7 @@ pub(crate) fn validate_and_repair_next_prompt(
         };
     }
 
-    let repaired_prompt = repair_next_prompt(prompt, budget);
+    let repaired_prompt = repair_next_prompt(prompt, budget, &issues);
     let repaired_issues = validate_next_prompt(&repaired_prompt, "", budget);
     issues.extend(
         repaired_issues
@@ -76,9 +76,12 @@ fn validate_next_prompt(prompt: &str, previous_prompt: &str, budget: &RoundBudge
     issues
 }
 
-fn repair_next_prompt(prompt: &str, budget: &RoundBudget) -> String {
+fn repair_next_prompt(prompt: &str, budget: &RoundBudget, issues: &[String]) -> String {
     if is_yolo_stop_like(prompt) {
         return focused_continue_prompt(budget);
+    }
+    if let Some(repaired) = preserve_concrete_prompt(prompt, budget, issues) {
+        return repaired;
     }
     let max_chars = budget.max_next_prompt_chars as usize;
     let detail_limit = max_chars.saturating_sub(1_500).clamp(120, 1_200);
@@ -152,6 +155,67 @@ Stop after completing this scoped task and summarizing verification."#,
         );
     }
     repaired
+}
+
+fn preserve_concrete_prompt(
+    prompt: &str,
+    budget: &RoundBudget,
+    issues: &[String],
+) -> Option<String> {
+    let missing_stop = issues
+        .iter()
+        .any(|issue| issue.contains("lacks a scoped stop condition"));
+    let missing_acceptance = issues
+        .iter()
+        .any(|issue| issue.contains("lacks acceptance criteria"));
+    let too_long = issues
+        .iter()
+        .any(|issue| issue.contains("exceeding budget"));
+    let must_replace = issues.iter().any(|issue| {
+        issue.contains("YOLO_STOP")
+            || issue.contains("too broad")
+            || issue.contains("lacks a clear title/objective")
+            || issue.contains("too similar")
+            || issue.contains("empty")
+    });
+    if must_replace {
+        return None;
+    }
+
+    let mut repaired = prompt.trim().to_string();
+    if too_long {
+        repaired = shorten_preserving_structure(&repaired, budget);
+    }
+    if missing_acceptance && !has_acceptance_or_verification(&repaired) {
+        repaired.push_str(
+            "\n\nAcceptance criteria:\n- The scoped task is completed.\n- Relevant verification commands are run and summarized.",
+        );
+    }
+    if missing_stop {
+        repaired.push_str(
+            "\n\nStop condition:\nStop after completing this scoped task and summarizing verification results.",
+        );
+    }
+    if repaired.chars().count() <= budget.max_next_prompt_chars as usize {
+        Some(repaired)
+    } else {
+        Some(shorten_preserving_structure(&repaired, budget))
+    }
+}
+
+fn shorten_preserving_structure(prompt: &str, budget: &RoundBudget) -> String {
+    let max_chars = budget.max_next_prompt_chars as usize;
+    let suffix = "\n\nStop condition:\nStop after completing this scoped task and summarizing verification results.";
+    let available = max_chars.saturating_sub(suffix.chars().count() + 40);
+    let head = prompt.chars().take(available).collect::<String>();
+    let mut shortened = format!("{head}\n\n[truncated to fit YOLO next-prompt budget]");
+    if !has_stop_condition(&shortened) {
+        shortened.push_str(suffix);
+    }
+    if shortened.chars().count() <= max_chars {
+        return shortened;
+    }
+    shortened.chars().take(max_chars).collect()
 }
 
 fn focused_continue_prompt(budget: &RoundBudget) -> String {
@@ -336,7 +400,7 @@ Stop after the verification commands are run and summarized."#
     #[test]
     fn yolo_next_prompt_validation_repairs_missing_acceptance_criteria() {
         let result = validate_and_repair_next_prompt(
-            "Next Step: fix the backend build",
+            "Next Step: fix the backend build\n\nTask:\nCreate backend/seed-data.js.",
             "previous",
             &budget(),
         );
@@ -349,6 +413,41 @@ Stop after the verification commands are run and summarized."#
                 .iter()
                 .any(|issue| issue.contains("acceptance criteria"))
         );
+        assert!(result.prompt.contains("Create backend/seed-data.js."));
+        assert!(result.prompt.contains("Acceptance criteria:"));
+        assert!(result.prompt.contains("Stop condition:"));
+    }
+
+    #[test]
+    fn yolo_next_prompt_validation_appends_missing_stop_condition_without_replacing() {
+        let prompt = r#"Title:
+Fix frontend API URL.
+
+Context:
+The browser fetches http://backend:8000 and receives HTTP 500.
+
+Task:
+Update frontend/src/App.tsx to use http://localhost:2226 through configuration.
+
+Acceptance criteria:
+- frontend/src/App.tsx no longer uses http://backend:8000.
+- curl -sf http://localhost:2225 returns product HTML.
+
+Verification commands:
+- rg "backend:8000" frontend || true
+- curl -sf http://localhost:2225 | grep -i product"#;
+
+        let result = validate_and_repair_next_prompt(prompt, "previous", &budget());
+
+        assert!(result.passed);
+        assert!(result.repaired);
+        assert!(result.prompt.contains("Update frontend/src/App.tsx"));
+        assert!(
+            result
+                .prompt
+                .contains("rg \"backend:8000\" frontend || true")
+        );
+        assert!(result.prompt.contains("Stop condition:"));
     }
 
     #[test]

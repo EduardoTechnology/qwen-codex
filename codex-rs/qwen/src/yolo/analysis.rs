@@ -29,6 +29,10 @@ pub(crate) struct YoloRunAnalysis {
     pub allow_refiner_stop: bool,
     pub verify_commands: Vec<String>,
     pub verify_timeout_secs: u64,
+    pub acceptance_gate_enabled: bool,
+    pub acceptance_commands: Vec<String>,
+    pub acceptance_max_seconds: u64,
+    pub reject_stop_on_failed_acceptance: bool,
     pub completed_iterations: usize,
     pub stop_reason: Option<YoloStopReason>,
     pub final_status: String,
@@ -52,6 +56,19 @@ pub(crate) struct YoloRoundAnalysis {
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
     pub external_verification: Vec<ExternalVerificationResult>,
+    pub acceptance_gate_enabled: bool,
+    pub acceptance_results: Vec<ExternalVerificationResult>,
+    pub stop_signal_received: bool,
+    pub stop_signal_accepted: bool,
+    pub stop_signal_rejected: bool,
+    pub stop_signal_rejection_reason: Option<String>,
+    pub repair_prompt_after_failed_acceptance: Option<String>,
+    pub actions_captured_count: usize,
+    pub tool_calls_captured_count: usize,
+    pub commands_captured_count: usize,
+    pub files_changed_count: usize,
+    pub no_action_round: bool,
+    pub no_action_round_reason: Option<String>,
     pub refiner_was_called: bool,
     pub refiner_response_preview: Option<String>,
     pub next_prompt_preview: Option<String>,
@@ -124,6 +141,22 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
                 commands_tests_run: iteration.commands_tests_run.clone(),
                 errors: iteration.errors.clone(),
                 external_verification: iteration.external_verification.clone(),
+                acceptance_gate_enabled: iteration.acceptance_gate_enabled,
+                acceptance_results: iteration.acceptance_results.clone(),
+                stop_signal_received: iteration.stop_signal_received,
+                stop_signal_accepted: iteration.stop_signal_accepted,
+                stop_signal_rejected: iteration.stop_signal_rejected,
+                stop_signal_rejection_reason: iteration.stop_signal_rejection_reason.clone(),
+                repair_prompt_after_failed_acceptance: iteration
+                    .repair_prompt_after_failed_acceptance
+                    .as_deref()
+                    .map(preview),
+                actions_captured_count: iteration.actions_captured_count,
+                tool_calls_captured_count: iteration.tool_calls_captured_count,
+                commands_captured_count: iteration.commands_captured_count,
+                files_changed_count: iteration.files_changed_count,
+                no_action_round: iteration.no_action_round,
+                no_action_round_reason: iteration.no_action_round_reason.clone(),
                 refiner_was_called: iteration.refiner_raw_response.is_some(),
                 refiner_response_preview: iteration.refiner_raw_response.as_deref().map(preview),
                 next_prompt_preview: iteration
@@ -163,6 +196,10 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
         allow_refiner_stop: run.allow_refiner_stop,
         verify_commands: run.verify_commands.clone(),
         verify_timeout_secs: run.verify_timeout_secs,
+        acceptance_gate_enabled: run.acceptance_gate_enabled,
+        acceptance_commands: run.acceptance_commands.clone(),
+        acceptance_max_seconds: run.acceptance_max_seconds,
+        reject_stop_on_failed_acceptance: run.reject_stop_on_failed_acceptance,
         completed_iterations: run.iterations.len(),
         stop_reason: run.stop_reason.clone(),
         final_status: final_status(run).to_string(),
@@ -231,6 +268,18 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         "External verification commands",
         &analysis.verify_commands,
     );
+    out.push_str("\n## Acceptance Gate\n\n");
+    out.push_str(&format!(
+        "- Enabled: `{}`\n- Max seconds per command: `{}s`\n- Reject stop on failed acceptance: `{}`\n",
+        analysis.acceptance_gate_enabled,
+        analysis.acceptance_max_seconds,
+        analysis.reject_stop_on_failed_acceptance
+    ));
+    list(
+        &mut out,
+        "Acceptance commands",
+        &analysis.acceptance_commands,
+    );
     out.push_str("\n## Round Chaining\n\n");
     out.push_str(&format!(
         "- Checked: `{}`\n- All inputs matched previous nextPrompt: `{}`\n",
@@ -263,6 +312,23 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         "Refiner errors",
         &analysis.diagnostics.refiner_errors,
     );
+    out.push_str("\n## Action Diagnostics\n\n");
+    out.push_str(
+        "| Round | Actions | Tool calls | Commands | Files | No-action round | Stop signal |\n",
+    );
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- |\n");
+    for round in &analysis.rounds {
+        out.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
+            round.iteration,
+            round.actions_captured_count,
+            round.tool_calls_captured_count,
+            round.commands_captured_count,
+            round.files_changed_count,
+            round.no_action_round,
+            stop_signal_status(round)
+        ));
+    }
     out.push_str("\n## Final Recommendation\n\n");
     out.push_str(match analysis.final_status.as_str() {
         "success" => "PASS\n",
@@ -499,6 +565,25 @@ fn verification_status(round: &YoloRoundAnalysis) -> String {
     }
 }
 
+fn stop_signal_status(round: &YoloRoundAnalysis) -> String {
+    if !round.stop_signal_received {
+        return "none".to_string();
+    }
+    if round.stop_signal_accepted {
+        return "accepted".to_string();
+    }
+    if round.stop_signal_rejected {
+        return format!(
+            "rejected: {}",
+            round
+                .stop_signal_rejection_reason
+                .as_deref()
+                .unwrap_or("unknown reason")
+        );
+    }
+    "received".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
@@ -523,6 +608,20 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -556,6 +655,10 @@ mod tests {
             allow_refiner_stop: false,
             verify_commands: Vec::new(),
             verify_timeout_secs: 15,
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_max_seconds: 300,
+            reject_stop_on_failed_acceptance: true,
             continue_after_timeout: false,
             max_repeated_prompts: 3,
             max_failures: 3,

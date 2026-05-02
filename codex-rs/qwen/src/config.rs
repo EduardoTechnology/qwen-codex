@@ -28,6 +28,9 @@ pub const DEFAULT_YOLO_REFINER_STYLE: &str = "incremental";
 pub const DEFAULT_YOLO_CONTINUE_AFTER_TIMEOUT: bool = false;
 pub const DEFAULT_YOLO_ALLOW_REFINER_STOP: bool = false;
 pub const DEFAULT_YOLO_VERIFY_TIMEOUT_SECS: u64 = 15;
+pub const DEFAULT_YOLO_ACCEPTANCE_GATE: bool = false;
+pub const DEFAULT_YOLO_ACCEPTANCE_MAX_SECONDS: u64 = 300;
+pub const DEFAULT_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE: bool = true;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedQwenConfig {
@@ -59,6 +62,10 @@ pub struct ResolvedYoloConfig {
     pub allow_refiner_stop: bool,
     pub verify_commands: Vec<String>,
     pub verify_timeout_secs: u64,
+    pub acceptance_gate_enabled: bool,
+    pub acceptance_commands: Vec<String>,
+    pub acceptance_max_seconds: u64,
+    pub reject_stop_on_failed_acceptance: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,6 +287,32 @@ impl ResolvedQwenConfig {
             None,
             DEFAULT_YOLO_VERIFY_TIMEOUT_SECS,
         )?;
+        let acceptance_gate_enabled = resolve_bool(
+            overrides.yolo_acceptance_gate,
+            env,
+            "QWEN_CODEX_YOLO_ACCEPTANCE_GATE",
+            None,
+            DEFAULT_YOLO_ACCEPTANCE_GATE,
+        )?;
+        let acceptance_commands = resolve_command_list(
+            &overrides.yolo_acceptance_commands,
+            env,
+            "QWEN_CODEX_YOLO_ACCEPTANCE_COMMANDS",
+        );
+        let acceptance_max_seconds = resolve_u64(
+            overrides.yolo_acceptance_max_seconds,
+            env,
+            "QWEN_CODEX_YOLO_ACCEPTANCE_MAX_SECONDS",
+            None,
+            DEFAULT_YOLO_ACCEPTANCE_MAX_SECONDS,
+        )?;
+        let reject_stop_on_failed_acceptance = resolve_bool(
+            None,
+            env,
+            "QWEN_CODEX_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE",
+            None,
+            DEFAULT_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE,
+        )?;
 
         Ok(Self {
             base_url,
@@ -306,6 +339,10 @@ impl ResolvedQwenConfig {
                 allow_refiner_stop,
                 verify_commands,
                 verify_timeout_secs,
+                acceptance_gate_enabled,
+                acceptance_commands,
+                acceptance_max_seconds,
+                reject_stop_on_failed_acceptance,
             },
         })
     }
@@ -443,6 +480,16 @@ fn resolve_optional_string(
     env.get(official)
         .and_then(non_empty)
         .or_else(|| alias.and_then(|name| env.get(name).and_then(non_empty)))
+}
+
+fn resolve_command_list(cli: &[String], env: &dyn EnvSource, official: &str) -> Vec<String> {
+    if !cli.is_empty() {
+        return cli
+            .iter()
+            .filter_map(|value| non_empty(value.clone()))
+            .collect();
+    }
+    split_verify_commands(&resolve_string(None, env, official, None, ""))
 }
 
 fn non_empty(value: String) -> Option<String> {
@@ -662,6 +709,10 @@ mod tests {
                 allow_refiner_stop: DEFAULT_YOLO_ALLOW_REFINER_STOP,
                 verify_commands: Vec::new(),
                 verify_timeout_secs: DEFAULT_YOLO_VERIFY_TIMEOUT_SECS,
+                acceptance_gate_enabled: DEFAULT_YOLO_ACCEPTANCE_GATE,
+                acceptance_commands: Vec::new(),
+                acceptance_max_seconds: DEFAULT_YOLO_ACCEPTANCE_MAX_SECONDS,
+                reject_stop_on_failed_acceptance: DEFAULT_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE,
             }
         );
     }
@@ -705,6 +756,22 @@ mod tests {
                 "QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS".to_string(),
                 "9".to_string(),
             ),
+            (
+                "QWEN_CODEX_YOLO_ACCEPTANCE_GATE".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_ACCEPTANCE_COMMANDS".to_string(),
+                "docker compose config;curl -sf http://localhost:2225".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_ACCEPTANCE_MAX_SECONDS".to_string(),
+                "120".to_string(),
+            ),
+            (
+                "QWEN_CODEX_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE".to_string(),
+                "false".to_string(),
+            ),
         ]);
 
         let config =
@@ -727,6 +794,16 @@ mod tests {
             vec!["echo ok".to_string(), "sh -c 'exit 7'".to_string()]
         );
         assert_eq!(config.yolo.verify_timeout_secs, 9);
+        assert!(config.yolo.acceptance_gate_enabled);
+        assert_eq!(
+            config.yolo.acceptance_commands,
+            vec![
+                "docker compose config".to_string(),
+                "curl -sf http://localhost:2225".to_string()
+            ]
+        );
+        assert_eq!(config.yolo.acceptance_max_seconds, 120);
+        assert!(!config.yolo.reject_stop_on_failed_acceptance);
     }
 
     #[test]
@@ -741,6 +818,32 @@ mod tests {
         assert_eq!(
             config.yolo.verify_timeout_secs,
             DEFAULT_YOLO_VERIFY_TIMEOUT_SECS
+        );
+        assert!(!config.yolo.acceptance_gate_enabled);
+        assert!(config.yolo.acceptance_commands.is_empty());
+        assert_eq!(
+            config.yolo.acceptance_max_seconds,
+            DEFAULT_YOLO_ACCEPTANCE_MAX_SECONDS
+        );
+        assert!(config.yolo.reject_stop_on_failed_acceptance);
+    }
+
+    #[test]
+    fn cli_acceptance_commands_override_env_commands() {
+        let env = HashMap::from([(
+            "QWEN_CODEX_YOLO_ACCEPTANCE_COMMANDS".to_string(),
+            "echo env".to_string(),
+        )]);
+        let overrides = QwenCliOverrides {
+            yolo_acceptance_commands: vec!["echo cli".to_string(), "sh -c 'echo a;b'".to_string()],
+            ..Default::default()
+        };
+
+        let config = ResolvedQwenConfig::from_env_source(&overrides, &env).unwrap();
+
+        assert_eq!(
+            config.yolo.acceptance_commands,
+            vec!["echo cli".to_string(), "sh -c 'echo a;b'".to_string()]
         );
     }
 

@@ -92,6 +92,10 @@ pub async fn run_yolo_mode(
         allow_refiner_stop: config.yolo.allow_refiner_stop,
         verify_commands: config.yolo.verify_commands.clone(),
         verify_timeout_secs: config.yolo.verify_timeout_secs,
+        acceptance_gate_enabled: config.yolo.acceptance_gate_enabled,
+        acceptance_commands: config.yolo.acceptance_commands.clone(),
+        acceptance_max_seconds: config.yolo.acceptance_max_seconds,
+        reject_stop_on_failed_acceptance: config.yolo.reject_stop_on_failed_acceptance,
         max_repeated_prompts: config.yolo.max_repeated_prompts,
         max_failures: config.yolo.max_failures,
         base_url: config.base_url.clone(),
@@ -147,6 +151,10 @@ where
         allow_refiner_stop: config.allow_refiner_stop,
         verify_commands: config.verify_commands.clone(),
         verify_timeout_secs: config.verify_timeout_secs,
+        acceptance_gate_enabled: config.acceptance_gate_enabled,
+        acceptance_commands: config.acceptance_commands.clone(),
+        acceptance_max_seconds: config.acceptance_max_seconds,
+        reject_stop_on_failed_acceptance: config.reject_stop_on_failed_acceptance,
         max_repeated_prompts: config.max_repeated_prompts,
         max_failures: config.max_failures,
         session_id: None,
@@ -272,6 +280,20 @@ where
             commands_tests_run: agent_result.commands_tests_run.clone(),
             errors: agent_result.errors.clone(),
             external_verification: Vec::new(),
+            acceptance_gate_enabled: config.acceptance_gate_enabled,
+            acceptance_commands: config.acceptance_commands.clone(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: agent_result.actions_taken.len(),
+            tool_calls_captured_count: agent_result.tool_calls.len(),
+            commands_captured_count: agent_result.commands_tests_run.len(),
+            files_changed_count: agent_result.changed_files.len(),
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status,
             interrupt_received,
             timeout_occurred,
@@ -290,6 +312,13 @@ where
             round_budget: config.round_budget.clone(),
             stop_reason: None,
         };
+        apply_action_diagnostics(&mut iteration_log, &agent_result);
+        if iteration_log.no_action_round {
+            if let Some(reason) = &iteration_log.no_action_round_reason {
+                iteration_log.errors.push(reason.clone());
+            }
+            consecutive_failures = consecutive_failures.saturating_add(1);
+        }
 
         if agent_result.timed_out && !config.continue_after_timeout {
             iteration_log.stop_reason = Some(YoloStopReason::RoundTimeout);
@@ -365,6 +394,7 @@ where
             .filter(|limit| *limit > 0)
             .is_some_and(|limit| iterations_completed + 1 >= limit)
         {
+            run_final_acceptance_if_configured(&config, &mut iteration_log).await;
             iterations_completed = iteration;
             iteration_log.stop_reason = Some(YoloStopReason::IterationLimitReached);
             write_iteration(&logger, &mut run_log, iteration_log).await?;
@@ -410,7 +440,7 @@ where
             }
         };
 
-        let next_prompt = refiner_response.next_prompt.trim().to_string();
+        let mut next_prompt = refiner_response.next_prompt.trim().to_string();
         iterations_completed = iteration;
         if interrupted(&config) {
             iteration_log.stop_reason = Some(YoloStopReason::Interrupted);
@@ -425,17 +455,86 @@ where
             break;
         }
 
-        if config.allow_refiner_stop && is_yolo_stop_signal(&next_prompt) {
-            iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
-            write_iteration(&logger, &mut run_log, iteration_log).await?;
-            finish_run(
-                &logger,
-                &mut run_log,
-                iterations_completed,
-                YoloStopReason::RefinerStopSignal,
-            )
-            .await?;
-            break;
+        if is_yolo_stop_signal(&next_prompt) {
+            iteration_log.stop_signal_received = true;
+            if config.acceptance_gate_enabled {
+                iteration_log.acceptance_results = run_external_verification(
+                    &config.acceptance_commands,
+                    config.acceptance_max_seconds,
+                )
+                .await;
+                if acceptance_gate_passed(&config, &iteration_log.acceptance_results) {
+                    iteration_log.stop_signal_accepted = true;
+                    iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
+                    write_iteration(&logger, &mut run_log, iteration_log).await?;
+                    finish_run(
+                        &logger,
+                        &mut run_log,
+                        iterations_completed,
+                        YoloStopReason::RefinerStopSignal,
+                    )
+                    .await?;
+                    break;
+                }
+
+                let rejection_reason =
+                    acceptance_rejection_reason(&config, &iteration_log.acceptance_results);
+                iteration_log.stop_signal_rejected = true;
+                iteration_log.stop_signal_rejection_reason = Some(rejection_reason.clone());
+                iteration_log.errors.push(rejection_reason);
+                if config.reject_stop_on_failed_acceptance {
+                    let repair_summary = build_acceptance_repair_summary(&iteration_log);
+                    let repair_response = refine(RefinerRequest {
+                        iteration,
+                        summary: repair_summary,
+                    })
+                    .await;
+                    next_prompt = match repair_response {
+                        Ok(response) => {
+                            let repaired = response.next_prompt.trim().to_string();
+                            iteration_log.repair_prompt_after_failed_acceptance =
+                                Some(repaired.clone());
+                            repaired
+                        }
+                        Err(err) => {
+                            if let Some(refiner_error) = err.downcast_ref::<RefinerClientError>() {
+                                iteration_log.refiner_error = Some(refiner_error.diagnostic());
+                            }
+                            iteration_log
+                                .errors
+                                .push(format!("refiner failed while repairing stop signal: {err}"));
+                            let repaired = failed_acceptance_fallback_prompt(&iteration_log);
+                            iteration_log.repair_prompt_after_failed_acceptance =
+                                Some(repaired.clone());
+                            repaired
+                        }
+                    };
+                } else {
+                    iteration_log.stop_signal_accepted = true;
+                    iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
+                    write_iteration(&logger, &mut run_log, iteration_log).await?;
+                    finish_run(
+                        &logger,
+                        &mut run_log,
+                        iterations_completed,
+                        YoloStopReason::RefinerStopSignal,
+                    )
+                    .await?;
+                    break;
+                }
+            } else if config.allow_refiner_stop {
+                iteration_log.stop_signal_accepted = true;
+                iteration_log.stop_reason = Some(YoloStopReason::RefinerStopSignal);
+                write_iteration(&logger, &mut run_log, iteration_log).await?;
+                finish_run(
+                    &logger,
+                    &mut run_log,
+                    iterations_completed,
+                    YoloStopReason::RefinerStopSignal,
+                )
+                .await?;
+                break;
+            }
         }
 
         let validated_prompt = prompt_validation::validate_and_repair_next_prompt(
@@ -562,6 +661,13 @@ EXTERNAL VERIFICATION FAILED:
 Errors:
 {errors}
 
+Action diagnostics:
+- actions captured: {actions_count}
+- tool calls captured: {tools_count}
+- commands captured: {commands_count}
+- files changed: {files_count}
+- no-action round: {no_action_round}
+
 Current git status:
 {status}
 
@@ -581,13 +687,14 @@ Next prompt contract:
 - Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
 - Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
 - If any external verification failed, target that failure before adding unrelated scope.
+- If a Docker/web project has frontend HTTP 500, backend health failure, products endpoint failure, Docker build failure, Docker compose config failure, missing README/run instructions, missing required endpoints, or browser JavaScript fetching an unreachable Docker service hostname such as http://backend:8000, treat it as an incomplete runtime blocker.
+- Browser JavaScript running on the host cannot fetch http://backend:8000. Use a host-reachable URL such as http://localhost:2226, a relative/proxy URL, or documented environment configuration.
 - Treat unverified acceptance criteria and unrun verification commands as incomplete.
 - Include exact verification commands and tell the agent to stop after the scoped task is verified.
+- Only emit YOLO_STOP when all original goals, explicit acceptance criteria, verification commands, and acceptance-gate checks are known to have passed and there are no known runtime failures or TODO blockers.
+- If acceptance gate results are missing, failed, or disabled, produce a focused next prompt instead of YOLO_STOP.
 
-Always return a next-prompt.
-Never indicate the task is complete.
-Never emit YOLO_STOP.
-Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round."#,
+Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless the acceptance evidence proves the project is complete."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
         summary = tail(
@@ -615,6 +722,11 @@ Your role is to inspect the latest round, identify the most impactful remaining 
             REFINER_LIST_ITEM_MAX_CHARS,
             REFINER_ERRORS_TOTAL_MAX_CHARS
         ),
+        actions_count = iteration.actions_captured_count,
+        tools_count = iteration.tool_calls_captured_count,
+        commands_count = iteration.commands_captured_count,
+        files_count = iteration.files_changed_count,
+        no_action_round = iteration.no_action_round,
         status = tail(&iteration.current_git_status, 1_000),
         diff = tail(&iteration.git_diff_summary, 1_500),
         style = &iteration.round_budget.style,
@@ -695,6 +807,198 @@ fn has_external_verification_failure(results: &[ExternalVerificationResult]) -> 
     results.iter().any(|result| result.exit_code != Some(0))
 }
 
+async fn run_final_acceptance_if_configured(
+    config: &YoloLoopConfig,
+    iteration_log: &mut YoloIterationLog,
+) {
+    if !config.acceptance_gate_enabled || config.acceptance_commands.is_empty() {
+        return;
+    }
+    iteration_log.acceptance_results =
+        run_external_verification(&config.acceptance_commands, config.acceptance_max_seconds).await;
+    if !acceptance_gate_passed(config, &iteration_log.acceptance_results) {
+        iteration_log.errors.push(format!(
+            "final acceptance failed before max_iterations stop: {}",
+            failed_verification_summary(&iteration_log.acceptance_results)
+        ));
+    }
+}
+
+fn acceptance_gate_passed(config: &YoloLoopConfig, results: &[ExternalVerificationResult]) -> bool {
+    config.acceptance_gate_enabled
+        && !config.acceptance_commands.is_empty()
+        && !has_external_verification_failure(results)
+        && results.len() == config.acceptance_commands.len()
+}
+
+fn acceptance_rejection_reason(
+    config: &YoloLoopConfig,
+    results: &[ExternalVerificationResult],
+) -> String {
+    if config.acceptance_commands.is_empty() {
+        return "refiner stop signal rejected: acceptance gate enabled but no acceptance commands are configured"
+            .to_string();
+    }
+    format!(
+        "refiner stop signal rejected: acceptance checks failed or were incomplete: {}",
+        failed_verification_summary(results)
+    )
+}
+
+fn build_acceptance_repair_summary(iteration: &YoloIterationLog) -> String {
+    let summary = format!(
+        r#"The refiner emitted YOLO_STOP, but Qwen Codex rejected that stop signal because acceptance checks did not pass.
+
+Original user prompt:
+{original}
+
+Latest agent input:
+{input}
+
+Latest agent output summary:
+{summary}
+
+Failed acceptance checks:
+{acceptance}
+
+Known errors:
+{errors}
+
+Changed files:
+{files}
+
+Commands/tests run:
+{commands}
+
+Task:
+Generate one bounded repair prompt for the coding agent. The prompt must target the failed acceptance checks first and must not broaden scope.
+
+Required next-prompt sections:
+Title
+Context
+Task
+Constraints
+Acceptance criteria
+Verification commands
+Stop condition
+
+Constraints for the next prompt:
+- Modify at most {max_files} files.
+- Use at most {max_actions} concrete actions.
+- Run at most {max_tests} verification commands.
+- Keep Docker/web checks focused and bounded.
+- Do not emit YOLO_STOP."#,
+        original = iteration.original_user_prompt,
+        input = iteration.current_agent_input_prompt,
+        summary = tail(
+            &iteration.agent_output_summary,
+            REFINER_AGENT_SUMMARY_MAX_CHARS
+        ),
+        acceptance = failed_verification_summary(&iteration.acceptance_results),
+        errors = bullet_lines_limited(
+            &iteration.errors,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            REFINER_ERRORS_TOTAL_MAX_CHARS
+        ),
+        files = bullet_lines_limited(&iteration.changed_files, 300, 1_000),
+        commands = bullet_lines_limited(
+            &iteration.commands_tests_run,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            1_200
+        ),
+        max_files = iteration.round_budget.max_files,
+        max_actions = iteration.round_budget.max_actions,
+        max_tests = iteration.round_budget.max_tests,
+    );
+    redact_text(&limit_text(&summary, REFINER_SUMMARY_MAX_CHARS))
+}
+
+fn failed_acceptance_fallback_prompt(iteration: &YoloIterationLog) -> String {
+    let acceptance = failed_verification_summary(&iteration.acceptance_results);
+    format!(
+        r#"Title:
+Fix failed acceptance checks.
+
+Context:
+The refiner attempted to stop, but acceptance checks failed or were incomplete:
+{acceptance}
+
+Task:
+Fix the smallest concrete runtime or build blocker shown in the failed acceptance output. Do not add unrelated features.
+
+Constraints:
+- Modify at most {max_files} files.
+- Use at most {max_actions} concrete actions.
+- Run at most {max_tests} verification commands.
+- Keep Docker ports and existing project shape unchanged.
+- For browser JavaScript, use host-reachable API URLs such as http://localhost:2226, a relative/proxy URL, or documented environment configuration.
+
+Acceptance criteria:
+- The failed acceptance command is addressed.
+- The changed area remains small and focused.
+- Verification commands are run and summarized.
+
+Verification commands:
+{commands}
+
+Stop condition:
+Stop this agent round after the failed acceptance check is fixed or the remaining blocker is clearly summarized."#,
+        max_files = iteration.round_budget.max_files,
+        max_actions = iteration.round_budget.max_actions,
+        max_tests = iteration.round_budget.max_tests,
+        commands = acceptance_commands_for_prompt(iteration),
+    )
+}
+
+fn acceptance_commands_for_prompt(iteration: &YoloIterationLog) -> String {
+    if iteration.acceptance_commands.is_empty() {
+        return "- git status --short\n- Run the smallest relevant build or runtime check"
+            .to_string();
+    }
+    iteration
+        .acceptance_commands
+        .iter()
+        .map(|command| format!("- {command}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn apply_action_diagnostics(iteration: &mut YoloIterationLog, agent_result: &AgentRoundResult) {
+    iteration.actions_captured_count = iteration.actions_taken.len();
+    iteration.tool_calls_captured_count = iteration.tool_calls_summary.len();
+    iteration.commands_captured_count = iteration.commands_tests_run.len();
+    iteration.files_changed_count = iteration.changed_files.len();
+
+    let captured_any_work = iteration.actions_captured_count > 0
+        || iteration.tool_calls_captured_count > 0
+        || iteration.commands_captured_count > 0
+        || iteration.files_changed_count > 0;
+    let claimed_completion = agent_result
+        .final_response
+        .as_deref()
+        .is_some_and(claims_completion);
+    iteration.no_action_round =
+        iteration.agent_finished_normally && claimed_completion && !captured_any_work;
+    iteration.no_action_round_reason = iteration.no_action_round.then(|| {
+        "agent completed the round without captured actions, commands, tool calls, or file changes"
+            .to_string()
+    });
+}
+
+fn claims_completion(value: &str) -> bool {
+    let lower = value.to_ascii_lowercase();
+    [
+        "completed",
+        "complete",
+        "done",
+        "created",
+        "implemented",
+        "finished",
+    ]
+    .into_iter()
+    .any(|word| lower.contains(word))
+}
+
 fn initial_round_prompt(original_prompt: &str, budget: &RoundBudget) -> String {
     format!(
         r#"{original_prompt}
@@ -763,6 +1067,10 @@ mod tests {
             allow_refiner_stop: false,
             verify_commands: Vec::new(),
             verify_timeout_secs: 15,
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_max_seconds: 300,
+            reject_stop_on_failed_acceptance: true,
             max_repeated_prompts: 3,
             max_failures: 3,
             base_url: "http://127.0.0.1:8002/v1".to_string(),
@@ -776,6 +1084,8 @@ mod tests {
             session_id: Some(session_id.to_string()),
             exit_code: Some(0),
             final_response: Some("done".to_string()),
+            actions_taken: vec!["shell: git status --short".to_string()],
+            commands_tests_run: vec!["git status --short".to_string()],
             ..AgentRoundResult::default()
         }
     }
@@ -1141,6 +1451,141 @@ Stop after the scoped task is complete and verification is summarized."#
     }
 
     #[tokio::test]
+    async fn yolo_acceptance_rejects_stop_signal_and_injects_repair_prompt() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(2));
+        config.acceptance_gate_enabled = true;
+        config.acceptance_commands = vec!["echo ok".to_string(), "sh -c 'exit 7'".to_string()];
+        config.acceptance_max_seconds = 5;
+        let refiner_calls = Rc::new(RefCell::new(0_u32));
+        let refiner_calls_for_refiner = refiner_calls.clone();
+        let repair_prompt = bounded_prompt("Fix failed frontend acceptance check");
+
+        let outcome = run_yolo_loop(
+            config,
+            |_| async { Ok(agent_result("session-1")) },
+            move |_| {
+                let refiner_calls = refiner_calls_for_refiner.clone();
+                let repair_prompt = repair_prompt.clone();
+                async move {
+                    let mut calls = refiner_calls.borrow_mut();
+                    *calls += 1;
+                    if *calls == 1 {
+                        Ok(RefinerResponse {
+                            raw_response: YOLO_STOP.to_string(),
+                            next_prompt: YOLO_STOP.to_string(),
+                        })
+                    } else {
+                        Ok(RefinerResponse {
+                            raw_response: repair_prompt.clone(),
+                            next_prompt: repair_prompt,
+                        })
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 2);
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+        assert_eq!(*refiner_calls.borrow(), 2);
+
+        let first_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let first = serde_json::from_str::<YoloIterationLog>(&first_json).unwrap();
+        assert!(first.stop_signal_received);
+        assert!(first.stop_signal_rejected);
+        assert!(!first.stop_signal_accepted);
+        assert_eq!(first.acceptance_results.len(), 2);
+        assert_eq!(first.acceptance_results[1].exit_code, Some(7));
+        assert!(first.repair_prompt_after_failed_acceptance.is_some());
+
+        let second_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-002.json")).unwrap();
+        let second = serde_json::from_str::<YoloIterationLog>(&second_json).unwrap();
+        assert_eq!(
+            second.current_agent_input_prompt,
+            first.next_prompt_injected_into_agent.unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn yolo_acceptance_accepts_stop_signal_when_checks_pass() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(5));
+        config.acceptance_gate_enabled = true;
+        config.acceptance_commands = vec!["echo ok".to_string()];
+        config.acceptance_max_seconds = 5;
+
+        let outcome = run_yolo_loop(
+            config,
+            |_| async { Ok(agent_result("session-1")) },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: YOLO_STOP.to_string(),
+                    next_prompt: YOLO_STOP.to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 1);
+        assert_eq!(outcome.stop_reason, YoloStopReason::RefinerStopSignal);
+
+        let first_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let first = serde_json::from_str::<YoloIterationLog>(&first_json).unwrap();
+        assert!(first.stop_signal_received);
+        assert!(first.stop_signal_accepted);
+        assert!(!first.stop_signal_rejected);
+        assert_eq!(first.acceptance_results.len(), 1);
+        assert_eq!(first.acceptance_results[0].exit_code, Some(0));
+    }
+
+    #[tokio::test]
+    async fn yolo_acceptance_runs_before_fixed_iteration_success() {
+        let temp = TempDir::new().unwrap();
+        let mut config = loop_config(&temp, Some(1));
+        config.acceptance_gate_enabled = true;
+        config.acceptance_commands = vec!["sh -c 'exit 7'".to_string()];
+        config.acceptance_max_seconds = 5;
+
+        let outcome = run_yolo_loop(
+            config,
+            |_| async { Ok(agent_result("session-1")) },
+            |_| async {
+                Ok(RefinerResponse {
+                    raw_response: "unused".to_string(),
+                    next_prompt: "unused".to_string(),
+                })
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.iterations_completed, 1);
+        assert_eq!(outcome.stop_reason, YoloStopReason::IterationLimitReached);
+
+        let first_json =
+            std::fs::read_to_string(outcome.run_dir.join("iteration-001.json")).unwrap();
+        let first = serde_json::from_str::<YoloIterationLog>(&first_json).unwrap();
+        assert_eq!(first.acceptance_results.len(), 1);
+        assert_eq!(first.acceptance_results[0].exit_code, Some(7));
+        assert!(
+            first
+                .errors
+                .iter()
+                .any(|error| error.contains("final acceptance failed before max_iterations stop"))
+        );
+
+        let analysis_json = std::fs::read_to_string(outcome.run_dir.join("analysis.json")).unwrap();
+        let analysis: serde_json::Value = serde_json::from_str(&analysis_json).unwrap();
+        assert_eq!(analysis["finalStatus"], "partial");
+    }
+
+    #[tokio::test]
     async fn yolo_external_verification_is_recorded_and_passed_to_refiner() {
         let temp = TempDir::new().unwrap();
         let mut config = loop_config(&temp, Some(2));
@@ -1177,6 +1622,134 @@ Stop after the scoped task is complete and verification is summarized."#
         assert_eq!(iteration_log.external_verification.len(), 2);
         assert_eq!(iteration_log.external_verification[0].exit_code, Some(0));
         assert_eq!(iteration_log.external_verification[1].exit_code, Some(7));
+    }
+
+    #[test]
+    fn yolo_action_diagnostics_do_not_treat_actions_as_missing_tools() {
+        let mut iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "prompt".to_string(),
+            agent_output_summary: "summary".to_string(),
+            actions_taken: vec!["shell: touch README.md".to_string()],
+            tool_calls_summary: Vec::new(),
+            changed_files: vec!["README.md".to_string()],
+            git_diff_summary: String::new(),
+            commands_tests_run: vec!["touch README.md".to_string()],
+            errors: Vec::new(),
+            external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
+            current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
+            stop_reason: None,
+        };
+        let result = AgentRoundResult {
+            final_response: Some("Completed".to_string()),
+            actions_taken: iteration.actions_taken.clone(),
+            changed_files: iteration.changed_files.clone(),
+            commands_tests_run: iteration.commands_tests_run.clone(),
+            exit_code: Some(0),
+            ..AgentRoundResult::default()
+        };
+
+        apply_action_diagnostics(&mut iteration, &result);
+
+        assert_eq!(iteration.actions_captured_count, 1);
+        assert_eq!(iteration.tool_calls_captured_count, 0);
+        assert_eq!(iteration.commands_captured_count, 1);
+        assert_eq!(iteration.files_changed_count, 1);
+        assert!(!iteration.no_action_round);
+    }
+
+    #[test]
+    fn yolo_action_diagnostics_mark_completed_empty_rounds() {
+        let mut iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "prompt".to_string(),
+            agent_output_summary: "summary".to_string(),
+            actions_taken: Vec::new(),
+            tool_calls_summary: Vec::new(),
+            changed_files: Vec::new(),
+            git_diff_summary: String::new(),
+            commands_tests_run: Vec::new(),
+            errors: Vec::new(),
+            external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
+            current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
+            stop_reason: None,
+        };
+        let result = AgentRoundResult {
+            final_response: Some("Completed".to_string()),
+            exit_code: Some(0),
+            ..AgentRoundResult::default()
+        };
+
+        apply_action_diagnostics(&mut iteration, &result);
+
+        assert!(iteration.no_action_round);
+        assert!(iteration.no_action_round_reason.is_some());
     }
 
     #[tokio::test]
@@ -1274,6 +1847,20 @@ Stop after the scoped task is complete and verification is summarized."#
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -1317,6 +1904,20 @@ Stop after the scoped task is complete and verification is summarized."#
             commands_tests_run: Vec::new(),
             errors: vec!["error".repeat(100_000)],
             external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 1,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status: "status".repeat(10_000),
             interrupt_received: false,
             timeout_occurred: false,

@@ -12,9 +12,11 @@ This roadmap tracks work that remains after the normal CLI and initial YOLO mile
 - Qwen-only Responses compatibility for the verified vLLM behavior.
 - YOLO loop controller, refiner client, logging, redaction, and guard tests.
 - YOLO round budget config, structured refiner prompt guidance, and next-prompt validation/repair.
+- YOLO acceptance gate with rejected stop signals, acceptance-result logging, final fixed-iteration acceptance checks, and repair prompts from failed acceptance output.
 - Live normal-mode tool-call smoke against the local Qwen/vLLM server.
 - Live two-iteration YOLO smoke that created `hello.txt` and then `README.md`.
 - Live bounded ecommerce YOLO rerun with clean round chaining, no timeout, valid logs, compose config/build passing, and backend runtime checks passing.
+- Live six-round ecommerce acceptance-gated run with `max_iterations`, valid logs, secret redaction, working round chaining, and a runnable Docker project verified by compose build plus backend/frontend curls.
 - Behavioral PDF and DOCX file generation through shell/file tools.
 
 ## Next
@@ -22,8 +24,8 @@ This roadmap tracks work that remains after the normal CLI and initial YOLO mile
 - Add or enable a real web search tool for local Qwen Codex. Current behavior test result: `CAPABILITY_MISSING` because `web_search` is unsupported by the active tool router.
 - Improve spreadsheet generation. Current XLSX behavior test result: `FAIL` because package-based generation could not install or import `pandas`/`openpyxl`, and `test.xlsx` was not created.
 - Add deterministic document-generation helpers or skills for PDF/DOCX/XLSX so local models do not need to improvise OOXML/PDF internals.
-- Improve YOLO completion criteria. The bounded ecommerce rerun stopped via `YOLO_STOP` after 3 rounds even though external frontend runtime verification still failed with HTTP 500.
-- Feed post-run verification failures into follow-up refinement prompts or add optional objective-specific acceptance checks before accepting a refiner stop signal.
+- Reduce long single-round agent turns on Docker projects. The acceptance-gated ecommerce run completed, but round 2 took 1171 seconds because the generated verification workflow briefly ran long-lived server processes inside the agent turn.
+- Consider stronger refiner guidance for bounded Docker verification commands so generated prompts do not encourage foreground servers or oversized repair rounds.
 - Stress-test auto-compaction in long YOLO runs near the 32768-token Qwen context limit.
 - Expand integration coverage around Codex JSON event parsing if upstream event shapes change.
 - Add more community model compose files under `modelo/`.

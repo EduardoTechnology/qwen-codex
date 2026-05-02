@@ -131,12 +131,19 @@ fn run_markdown(run: &YoloRunLog) -> String {
         "- External verification timeout: `{}s`\n",
         run.verify_timeout_secs
     ));
+    out.push_str(&format!(
+        "- Acceptance gate: `{}`\n- Acceptance max seconds: `{}s`\n- Reject stop on failed acceptance: `{}`\n",
+        run.acceptance_gate_enabled,
+        run.acceptance_max_seconds,
+        run.reject_stop_on_failed_acceptance
+    ));
     out.push_str(&format!("- Stop reason: `{:?}`\n\n", run.stop_reason));
     list_section(
         &mut out,
         "External Verification Commands",
         &run.verify_commands,
     );
+    list_section(&mut out, "Acceptance Commands", &run.acceptance_commands);
     out.push_str("## Original Prompt\n\n");
     out.push_str(&run.original_prompt);
     out.push_str("\n\n## Iterations\n\n");
@@ -174,6 +181,21 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
         iteration.next_prompt_repaired,
         iteration.next_prompt_validation_issues.len()
     ));
+    out.push_str(&format!(
+        "- Action diagnostics: actions=`{}` toolCalls=`{}` commands=`{}` files=`{}` noActionRound=`{}`\n",
+        iteration.actions_captured_count,
+        iteration.tool_calls_captured_count,
+        iteration.commands_captured_count,
+        iteration.files_changed_count,
+        iteration.no_action_round
+    ));
+    out.push_str(&format!(
+        "- Stop signal: received=`{}` accepted=`{}` rejected=`{}` reason=`{:?}`\n\n",
+        iteration.stop_signal_received,
+        iteration.stop_signal_accepted,
+        iteration.stop_signal_rejected,
+        iteration.stop_signal_rejection_reason
+    ));
     section(
         &mut out,
         "Current Agent Input",
@@ -193,6 +215,7 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
         &iteration.commands_tests_run,
     );
     external_verification_section(&mut out, &iteration.external_verification);
+    acceptance_results_section(&mut out, &iteration.acceptance_results);
     list_section(&mut out, "Errors", &iteration.errors);
     section(&mut out, "Git Status", &iteration.current_git_status);
     section(&mut out, "Git Diff Summary", &iteration.git_diff_summary);
@@ -204,6 +227,9 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
     }
     if let Some(prompt) = &iteration.next_prompt_injected_into_agent {
         section(&mut out, "Next Prompt Injected", prompt);
+    }
+    if let Some(prompt) = &iteration.repair_prompt_after_failed_acceptance {
+        section(&mut out, "Repair Prompt After Failed Acceptance", prompt);
     }
     list_section(
         &mut out,
@@ -253,6 +279,27 @@ fn external_verification_section(
     out.push('\n');
 }
 
+fn acceptance_results_section(
+    out: &mut String,
+    values: &[crate::yolo::types::ExternalVerificationResult],
+) {
+    out.push_str("## Acceptance Results\n\n");
+    if values.is_empty() {
+        out.push_str("- None\n\n");
+        return;
+    }
+    for value in values {
+        out.push_str(&format!(
+            "- `{}` -> `{:?}` in `{}ms`: `{}`\n",
+            value.command.replace('`', "'"),
+            value.exit_code,
+            value.duration_ms,
+            value.output.replace('`', "'")
+        ));
+    }
+    out.push('\n');
+}
+
 #[cfg(test)]
 mod tests {
     use tempfile::TempDir;
@@ -280,6 +327,20 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -333,6 +394,20 @@ mod tests {
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 1,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: true,
             timeout_occurred: false,

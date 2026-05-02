@@ -126,6 +126,10 @@ QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false
 QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false
 QWEN_CODEX_YOLO_VERIFY_COMMANDS=
 QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS=15
+QWEN_CODEX_YOLO_ACCEPTANCE_GATE=false
+QWEN_CODEX_YOLO_ACCEPTANCE_COMMANDS=
+QWEN_CODEX_YOLO_ACCEPTANCE_MAX_SECONDS=300
+QWEN_CODEX_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE=true
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
 QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
@@ -142,6 +146,19 @@ Round-budget settings guide the refiner toward smaller next prompts. By default 
 `QWEN_CODEX_YOLO_VERIFY_COMMANDS` and `--yolo-verify-commands` run semicolon-separated shell commands after each completed round and before the refiner call. Their exit codes and bounded output are logged in `externalVerification` and included in the refiner context, so runtime failures such as a failing frontend health check can drive the next prompt.
 
 Each external verification command has its own timeout, configured by `QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS` or `--yolo-verify-timeout-secs`. The default is 15 seconds so failed runtime checks do not stall the autonomous loop.
+
+For release-style workflows, enable the acceptance gate so a refiner stop signal is accepted only after real checks pass:
+
+```sh
+qwen-codex --yolo-refiner --iterations 6 \
+  --yolo-acceptance-gate \
+  --yolo-acceptance-command "docker compose config" \
+  --yolo-acceptance-command "docker compose build" \
+  --yolo-acceptance-command "docker compose up -d && sleep 8 && curl -fsS http://localhost:2226/health && curl -fsS http://localhost:2225; status=$?; docker compose down; exit $status" \
+  "Make this Dockerized app runnable."
+```
+
+When `QWEN_CODEX_YOLO_ACCEPTANCE_GATE=true`, `YOLO_STOP` is rejected if any acceptance command fails. The failed command output is logged under `acceptanceResults`, included in the refiner context, and converted into a bounded repair prompt. Fixed-iteration runs also execute acceptance commands before stopping at `max_iterations`, so failed acceptance checks mark the final status as partial instead of success.
 
 ## Safety Notes
 

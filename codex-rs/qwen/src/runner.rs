@@ -183,6 +183,11 @@ YOLO OPTIONS:
     --yolo-verify-commands <CMDS> Run semicolon-separated shell commands after each round
     --yolo-verify-timeout-secs <N>
                                   Timeout for each external verification command; default 15 seconds
+    --yolo-acceptance-gate       Gate YOLO_STOP on acceptance commands
+    --yolo-acceptance-command <CMD>
+                                  Add a shell command that must pass before accepting YOLO_STOP
+    --yolo-acceptance-max-secs <N>
+                                  Timeout for each acceptance command; default 300 seconds
     --max-repeated-prompts <N>    Repeated prompt guard
     --max-failures <N>            Repeated failure guard
     --dangerously-bypass-approvals-and-sandbox
@@ -205,6 +210,10 @@ ENVIRONMENT:
     QWEN_CODEX_YOLO_ALLOW_REFINER_STOP default: {allow_refiner_stop}
     QWEN_CODEX_YOLO_VERIFY_COMMANDS semicolon-separated external verification commands
     QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS default: {verify_timeout_secs}
+    QWEN_CODEX_YOLO_ACCEPTANCE_GATE default: {acceptance_gate}
+    QWEN_CODEX_YOLO_ACCEPTANCE_COMMANDS semicolon-separated acceptance commands
+    QWEN_CODEX_YOLO_ACCEPTANCE_MAX_SECONDS default: {acceptance_max_seconds}
+    QWEN_CODEX_YOLO_REJECT_STOP_ON_FAILED_ACCEPTANCE default: {reject_stop_on_failed_acceptance}
 
     A local .env file in the current directory is loaded for QWEN_CODEX_* and supported alias variables.
     Precedence is CLI flags, QWEN_CODEX_* environment, short aliases, documented defaults.
@@ -216,6 +225,7 @@ EXAMPLES:
     qwen-codex --yolo-refiner --iterations 10 "Refine this project."
     qwen-codex --yolo-refiner --iterations 5 --dangerously-bypass-approvals-and-sandbox "Autonomously refine this project."
     qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2225" "Improve runtime health."
+    qwen-codex --yolo-refiner --iterations 6 --yolo-acceptance-gate --yolo-acceptance-command "docker compose config" "Make this Docker project runnable."
 "#,
         version = env!("CARGO_PKG_VERSION"),
         base_url = config.base_url,
@@ -232,7 +242,10 @@ EXAMPLES:
         refiner_style = &config.yolo.round_budget.style,
         continue_after_timeout = config.yolo.continue_after_timeout,
         allow_refiner_stop = config.yolo.allow_refiner_stop,
-        verify_timeout_secs = config.yolo.verify_timeout_secs
+        verify_timeout_secs = config.yolo.verify_timeout_secs,
+        acceptance_gate = config.yolo.acceptance_gate_enabled,
+        acceptance_max_seconds = config.yolo.acceptance_max_seconds,
+        reject_stop_on_failed_acceptance = config.yolo.reject_stop_on_failed_acceptance
     );
 }
 

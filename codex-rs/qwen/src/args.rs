@@ -29,6 +29,9 @@ pub struct QwenCliOverrides {
     pub yolo_allow_refiner_stop: Option<bool>,
     pub yolo_verify_commands: Option<String>,
     pub yolo_verify_timeout_secs: Option<u64>,
+    pub yolo_acceptance_gate: Option<bool>,
+    pub yolo_acceptance_commands: Vec<String>,
+    pub yolo_acceptance_max_seconds: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -206,6 +209,15 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
         {
             continue;
         }
+        if consume_string_list_flag(
+            &args,
+            &mut index,
+            arg,
+            "--yolo-acceptance-command",
+            &mut overrides.yolo_acceptance_commands,
+        )? {
+            continue;
+        }
         if consume_u64_flag(
             &args,
             &mut index,
@@ -230,6 +242,12 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--yolo-verify-timeout-secs",
             &mut overrides.yolo_verify_timeout_secs,
+        )? || consume_u64_flag(
+            &args,
+            &mut index,
+            arg,
+            "--yolo-acceptance-max-secs",
+            &mut overrides.yolo_acceptance_max_seconds,
         )? {
             continue;
         }
@@ -300,6 +318,11 @@ pub fn parse_qwen_args(args: Vec<String>) -> anyhow::Result<ParsedQwenArgs> {
             arg,
             "--yolo-allow-refiner-stop",
             &mut overrides.yolo_allow_refiner_stop,
+        )? || consume_bool_flag(
+            &mut index,
+            arg,
+            "--yolo-acceptance-gate",
+            &mut overrides.yolo_acceptance_gate,
         )? {
             continue;
         }
@@ -398,6 +421,30 @@ fn consume_string_flag(
         return Ok(false);
     };
     *target = Some(value.to_string());
+    *index += 1;
+    Ok(true)
+}
+
+fn consume_string_list_flag(
+    args: &[String],
+    index: &mut usize,
+    arg: &str,
+    name: &str,
+    target: &mut Vec<String>,
+) -> anyhow::Result<bool> {
+    if arg == name {
+        let value = args
+            .get(*index + 1)
+            .with_context(|| format!("{name} requires a value"))?;
+        target.push(value.clone());
+        *index += 2;
+        return Ok(true);
+    }
+
+    let Some(value) = arg.strip_prefix(&format!("{name}=")) else {
+        return Ok(false);
+    };
+    target.push(value.to_string());
     *index += 1;
     Ok(true)
 }
@@ -612,6 +659,12 @@ mod tests {
             "echo ok;sh -c 'exit 7'".to_string(),
             "--yolo-verify-timeout-secs".to_string(),
             "9".to_string(),
+            "--yolo-acceptance-gate".to_string(),
+            "--yolo-acceptance-command".to_string(),
+            "docker compose config".to_string(),
+            "--yolo-acceptance-command=curl -sf http://localhost:2225".to_string(),
+            "--yolo-acceptance-max-secs".to_string(),
+            "120".to_string(),
             "Improve".to_string(),
         ])
         .unwrap();
@@ -631,6 +684,15 @@ mod tests {
             Some("echo ok;sh -c 'exit 7'".to_string())
         );
         assert_eq!(parsed.overrides.yolo_verify_timeout_secs, Some(9));
+        assert_eq!(parsed.overrides.yolo_acceptance_gate, Some(true));
+        assert_eq!(
+            parsed.overrides.yolo_acceptance_commands,
+            vec![
+                "docker compose config".to_string(),
+                "curl -sf http://localhost:2225".to_string()
+            ]
+        );
+        assert_eq!(parsed.overrides.yolo_acceptance_max_seconds, Some(120));
     }
 
     #[test]
