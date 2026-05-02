@@ -90,11 +90,14 @@ YOLO mode runs repeated normal Codex agent rounds and asks a separate OpenAI-com
 qwen-codex --yolo-refiner "Create a minimal README for this project."
 qwen-codex --yolo-refiner --iterations 10 "Refine this project."
 qwen-codex --yolo-refiner -n 3 "Improve tests and docs."
+qwen-codex --yolo --iterations 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2225" "Improve runtime health."
 ```
 
 `--yolo-refiner` is the preferred explicit flag. `--yolo` remains supported for compatibility, but upstream Codex also uses `--yolo` as an alias for `--dangerously-bypass-approvals-and-sandbox`.
 
-YOLO stops when the iteration limit is reached, one round times out, the agent subprocess exits with an error, the refiner returns `YOLO_STOP`, the repeated-prompt guard triggers, the failure guard triggers, or Ctrl+C is received. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as JSON and Markdown, with secrets redacted.
+With `--iterations N`, YOLO runs exactly `N` rounds unless the user interrupts it, one round times out with timeout continuation disabled, the agent subprocess fails, or the failure guard triggers. The refiner cannot stop the run by default; `YOLO_STOP` is treated as an invalid next prompt and repaired into a focused continuation prompt. Optional early stop is available only with `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true`.
+
+Without `--iterations`, or with `--iterations 0`, YOLO runs until Ctrl+C, timeout, the failure guard, or a fatal agent/refiner error. Logs are written to `.qwen-codex/yolo-runs/<run-id>/` as JSON and Markdown, with secrets redacted.
 
 Each run also writes `analysis.json` and `analysis.md`, which summarize stop reason, round chaining, agent subprocess status, refiner calls, changed files, and diagnostics in one place.
 
@@ -120,6 +123,9 @@ QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS=3
 QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS=3000
 QWEN_CODEX_YOLO_REFINER_STYLE=incremental
 QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false
+QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false
+QWEN_CODEX_YOLO_VERIFY_COMMANDS=
+QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS=15
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
 QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
@@ -132,6 +138,10 @@ Leave `QWEN_CODEX_YOLO_DEFAULT_ITERATIONS` blank for unlimited YOLO mode unless 
 Round-budget settings guide the refiner toward smaller next prompts. By default the refiner should ask for at most 8 files, 5 concrete actions, 3 verification commands, and a 3000-character next prompt. Qwen Codex validates each refiner prompt before injecting it into the next agent round; broad prompts such as "finish everything" are repaired into a smaller scoped task or rejected.
 
 `QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT` defaults to `false`. The safe default is to stop on timeout rather than continue from incomplete work.
+
+`QWEN_CODEX_YOLO_VERIFY_COMMANDS` and `--yolo-verify-commands` run semicolon-separated shell commands after each completed round and before the refiner call. Their exit codes and bounded output are logged in `externalVerification` and included in the refiner context, so runtime failures such as a failing frontend health check can drive the next prompt.
+
+Each external verification command has its own timeout, configured by `QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS` or `--yolo-verify-timeout-secs`. The default is 15 seconds so failed runtime checks do not stall the autonomous loop.
 
 ## Safety Notes
 

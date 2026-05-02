@@ -121,8 +121,10 @@ YOLO behavior covered by tests:
 
 - CLI parsing for `--yolo`, `--iterations`, `-n`, and the optional `--10` shorthand.
 - Fixed iteration limits.
-- Infinite-mode setup without looping forever by stopping on `YOLO_STOP`.
-- `YOLO_STOP` refiner stop signal.
+- Fixed iteration runs exhaust the configured `--iterations N` by default.
+- `YOLO_STOP` is repaired into a focused continuation prompt by default.
+- `YOLO_STOP` can stop the run only when `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true` is explicitly configured.
+- External verification commands are recorded in iteration logs and included in refiner context before the next prompt is generated.
 - Repeated prompt guard.
 - Consecutive failure guard.
 - Ctrl+C interrupt flag behavior between rounds.
@@ -272,6 +274,8 @@ UX conclusion:
 
 ## YOLO Bounded Ecommerce Rerun
 
+This section records the previous bounded ecommerce run before external verification and default `YOLO_STOP` suppression were added.
+
 Command used:
 
 ```text
@@ -339,7 +343,60 @@ UX conclusion:
 - Refiner prompts were smaller, structured, and contained acceptance criteria and verification commands.
 - The generated project is more runnable than the previous attempt because compose config/build pass and backend endpoints work.
 - The generated app is not complete production-quality because the frontend route fails at runtime and the refiner stopped too early.
-- Next recommended improvement: feed post-run verification failures back into a follow-up YOLO prompt or add optional objective-specific acceptance checks so the refiner does not return `YOLO_STOP` while external runtime checks still fail.
+- Next recommended improvement: feed external runtime checks into each refiner turn and prevent default refiner early stop. This is now implemented and needs a fresh live rerun.
+
+## YOLO External Verification Rerun
+
+Command used:
+
+```text
+qwen-codex --dangerously-bypass-approvals-and-sandbox --iterations 5 --yolo --yolo-verify-timeout-secs 5 --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2226/api/products;curl -sf http://localhost:2225" "<runnable ecommerce prompt>"
+```
+
+Run paths:
+
+- Workspace: `/tmp/qwen-yolo-ecommerce`
+- Windows log directory: `C:\Users\eduar\Documents\qwen-codex-yolo-logs\ecommerce-external-verify-final\20260502T042912Z-2327436`
+- WSL log directory: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/ecommerce-external-verify-final/20260502T042912Z-2327436`
+- Analysis JSON: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/ecommerce-external-verify-final/20260502T042912Z-2327436/analysis.json`
+
+Result:
+
+- Completed all 5 requested rounds: `NO`.
+- Completed iterations: `2`.
+- Stop reason: `round_timeout`.
+- Final status: `timeout`.
+- Round chaining: `PASS`; round 2 input matched round 1 `nextPrompt`.
+- Secret redaction: `PASS`; `local-dev-key` was not present in logs.
+- JSON validation: `run.json`, `analysis.json`, `iteration-001.json`, and `iteration-002.json` parsed with `python3 -m json.tool`.
+- Refiner early stop: `PASS`; the refiner did not stop the run with `YOLO_STOP`.
+- External verification timeout: `PASS`; failed curl checks in round 1 were bounded to roughly 5 seconds each and were logged under `externalVerification`.
+- External verification in refiner context: `PASS`; round 1 refiner summary included `EXTERNAL VERIFICATION FAILED:` with the failing curl commands.
+- Initial round budget guidance: present; round 1 `agentInputPrompt` included YOLO round 1 execution constraints.
+
+Round review:
+
+| Round | Agent result | Refiner called? | External verification | Stop reason | Notes |
+| --- | --- | --- | --- | --- | --- |
+| 1 | Created a partial Dockerized scaffold with backend/frontend files and compose. | Yes | All three curl checks timed out after the configured 5 seconds because services were not running yet. | None | The refiner generated a scoped next prompt and it was repaired into a bounded blocker-fix prompt. |
+| 2 | Added/modified scaffold files but did not hand back before the per-round timeout. | No | Not run because the agent round timed out. | `round_timeout` | YOLO stopped cleanly because `QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false` by default. |
+
+Project verification after timeout:
+
+- `docker-compose.yml`: present.
+- `backend/`: present.
+- `frontend/`: present.
+- Host ports in compose: frontend `2225`, backend `2226`, mongo `2227`.
+- `docker compose config`: `PASS`, with only Docker Compose's obsolete `version` warning.
+- `docker compose build`: `FAIL`; frontend Dockerfile uses `pip3 install --break-system-packages`, but the base image's pip does not support that option.
+- Runtime curls after build: not run because build failed.
+
+Conclusion:
+
+- The requested default iteration semantics are fixed in code and unit tests: `YOLO_STOP` is ignored/repaired by default, fixed iteration runs are not stopped by the refiner, and opt-in refiner stop remains available.
+- External verification is implemented and worked as intended in the live run.
+- The live ecommerce run did not satisfy the desired `completedIterations=5` / `stopReason=max_iterations` acceptance result because the local Qwen agent timed out during round 2. This is now logged honestly as `round_timeout`, not as a refiner stop or interruption.
+- Remaining product work: improve agent-round completion behavior for larger generated-app tasks, or provide a user-visible mode to continue after timeout when the partially completed round created useful files.
 
 ## Context Management
 

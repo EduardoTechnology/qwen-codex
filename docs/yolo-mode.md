@@ -44,6 +44,9 @@ QWEN_CODEX_YOLO_ROUND_GOAL_MAX_TESTS=3
 QWEN_CODEX_YOLO_REFINER_MAX_PROMPT_CHARS=3000
 QWEN_CODEX_YOLO_REFINER_STYLE=incremental
 QWEN_CODEX_YOLO_CONTINUE_AFTER_TIMEOUT=false
+QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=false
+QWEN_CODEX_YOLO_VERIFY_COMMANDS=
+QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS=15
 QWEN_CODEX_YOLO_DEFAULT_ITERATIONS=
 QWEN_CODEX_YOLO_MAX_REPEATED_PROMPTS=3
 QWEN_CODEX_YOLO_MAX_FAILURES=3
@@ -73,6 +76,9 @@ CLI flags override environment values:
 --yolo-next-prompt-max-chars <N>
 --yolo-refiner-style <STYLE>
 --yolo-continue-after-timeout
+--yolo-allow-refiner-stop
+--yolo-verify-commands "cmd1;cmd2"
+--yolo-verify-timeout-secs <N>
 --max-repeated-prompts <N>
 --max-failures <N>
 ```
@@ -84,18 +90,26 @@ For each iteration, Qwen Codex:
 1. Runs one normal Codex agent round through the upstream `codex exec` path.
 2. Captures the prompt, final output, structured JSON events, tool-call summaries when exposed, commands, changed files, git status, git diff summary, and errors.
 3. Builds a redacted summary.
-4. Sends that summary to the configured refiner model via `/v1/chat/completions`.
-5. Uses the refiner response as the next prompt and resumes the same Codex thread.
+4. Runs optional external verification commands configured by `--yolo-verify-commands` or `QWEN_CODEX_YOLO_VERIFY_COMMANDS`.
+5. Sends the round summary and external verification results to the configured refiner model via `/v1/chat/completions`.
+6. Uses the refiner response as the next prompt and resumes the same Codex thread.
+
+With `--iterations N`, the normal stop reason is `max_iterations` after exactly `N` completed rounds. The refiner cannot stop the run by default. If it returns `YOLO_STOP`, Qwen Codex treats that as an invalid next prompt and locally repairs it into a focused prompt that asks the agent to verify and improve the most important remaining acceptance criterion.
+
+Without `--iterations`, or with `--iterations 0`, YOLO runs indefinitely until Ctrl+C, timeout, the failure guard, or a fatal agent/refiner error.
+
+The first agent round receives a small YOLO-only execution note appended to the user's original prompt. That note tells the agent it is in round 1 of a multi-round autonomous run, should prefer a minimal runnable baseline, should respect the configured round budget where practical, and should stop after summarizing verification. Later rounds get the same scoping through the refiner-generated next prompt.
 
 The loop stops when:
 
 - The fixed iteration limit is reached.
 - A single agent round exceeds `QWEN_CODEX_YOLO_ROUND_TIMEOUT_SECS`, which defaults to 600 seconds.
 - The normal Codex agent subprocess exits nonzero without an explicit YOLO interrupt.
-- The refiner returns `YOLO_STOP`.
 - The repeated-prompt guard triggers.
 - The consecutive-failure guard triggers.
 - Ctrl+C is received; the process stops cleanly between rounds.
+
+Optional early stop by refiner is disabled by default and is discouraged for product-generation workflows. It can be enabled explicitly with `--yolo-allow-refiner-stop` or `QWEN_CODEX_YOLO_ALLOW_REFINER_STOP=true`; only then can `YOLO_STOP` produce `stopReason: "refiner_stop_signal"`.
 
 When a round times out, YOLO stops the run instead of trying to refine from an incomplete agent result. The iteration log records `stopReason: "round_timeout"` and an error such as `agent round timed out after 600 second(s)`. This prevents a stuck local model/tool turn from blocking unattended runs forever.
 
@@ -116,6 +130,31 @@ YOLO round budgets are advisory limits that shape the refiner's next prompt:
 The refiner prompt must use a structured shape with `Title`, `Context`, `Task`, `Constraints`, `Acceptance criteria`, `Verification commands`, and `Stop condition`. Before YOLO injects the next prompt, Qwen Codex validates that it fits the configured length, has a clear objective, includes acceptance criteria or verification commands, avoids broad instructions such as "finish everything", is not a repeat of the previous prompt, and tells the agent when to stop.
 
 If the prompt is too broad or incomplete, YOLO attempts a local repair into a smaller scoped task. The iteration log records `nextPromptValidationPassed`, `nextPromptValidationIssues`, `nextPromptRepaired`, and `roundBudget`. If repair cannot produce a valid prompt, the run stops with `refiner_error`.
+
+## External Verification
+
+External verification lets YOLO check real runtime acceptance criteria outside the model transcript before asking the refiner for the next prompt.
+
+```sh
+qwen-codex --yolo --iterations 5 \
+  --yolo-verify-commands "curl -sf http://localhost:2226/health;curl -sf http://localhost:2226/api/products;curl -sf http://localhost:2225" \
+  "Improve this Dockerized app."
+```
+
+Commands are separated by semicolons. Basic single and double quotes are respected when splitting the command string. Each command runs after a successful agent round and before the refiner call. Each command has an independent timeout, configured by `QWEN_CODEX_YOLO_VERIFY_TIMEOUT_SECS` or `--yolo-verify-timeout-secs`, defaulting to 15 seconds. Logs include:
+
+```json
+"externalVerification": [
+  {
+    "command": "curl -sf http://localhost:2225",
+    "exitCode": 1,
+    "output": "...",
+    "durationMs": 1234
+  }
+]
+```
+
+If any command fails, the refiner context includes `EXTERNAL VERIFICATION FAILED:` with the failing command, exit code, and bounded output. The refiner prompt instructs the model to target those failures before adding unrelated scope. Without configured verification commands, YOLO behavior is unchanged.
 
 ## Logging
 
@@ -172,7 +211,7 @@ The refiner receives bounded context derived from the latest iteration summary, 
 
 ## Refiner Prompt
 
-The default refiner system prompt asks the model to act as a senior product and engineering iteration planner. It instructs the refiner to produce only the next concrete coding-agent prompt, avoid repeating completed work, prefer one small verifiable step, fix build/runtime blockers before adding scope, include acceptance criteria and exact verification commands, stop after the scoped task, and output `YOLO_STOP` when no useful work remains.
+The default refiner system prompt asks the model to act as a senior product and engineering iteration planner. It instructs the refiner to produce only the next concrete coding-agent prompt, avoid repeating completed work, prefer one small verifiable step, fix build/runtime blockers before adding scope, include acceptance criteria and exact verification commands, and stop the agent after the scoped task. It also instructs the refiner to always return a next prompt and never emit `YOLO_STOP`.
 
 ## Architecture Notes
 
