@@ -9,7 +9,7 @@ use serde::Serialize;
 use crate::config::ResolvedQwenConfig;
 use crate::redaction::redact_text;
 use crate::yolo::agent::tail;
-use crate::yolo::guidance::QWEN_SAFE_FILE_WRITE_GUIDANCE;
+use crate::yolo::guidance::qwen_yolo_local_guidance;
 use crate::yolo::types::RefinerFailureDiagnostic;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
@@ -91,7 +91,8 @@ Rules:
 - Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless acceptance evidence proves the project is complete."#;
 
 pub(crate) fn default_refiner_system_prompt() -> String {
-    format!("{BASE_REFINER_SYSTEM_PROMPT}\n\n{QWEN_SAFE_FILE_WRITE_GUIDANCE}")
+    let guidance = qwen_yolo_local_guidance();
+    format!("{BASE_REFINER_SYSTEM_PROMPT}\n\n{guidance}")
 }
 
 #[derive(Clone)]
@@ -293,6 +294,9 @@ mod tests {
         assert!(prompt.contains("Path(\"file\").write_text"));
         assert!(prompt.contains("python3 -m json.tool file"));
         assert!(prompt.contains("node --check file"));
+        assert!(prompt.contains("Qwen local MCP fallback"));
+        assert!(prompt.contains("git status"));
+        assert!(prompt.contains("docker compose"));
     }
 
     #[tokio::test]

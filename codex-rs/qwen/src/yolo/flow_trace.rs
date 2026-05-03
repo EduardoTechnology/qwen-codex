@@ -1,6 +1,7 @@
 use serde::Serialize;
 
 use crate::yolo::analysis::RoundChainingAnalysis;
+use crate::yolo::analysis::UnavailableToolAttempt;
 use crate::yolo::analysis::build_run_analysis;
 use crate::yolo::types::ExternalVerificationResult;
 use crate::yolo::types::YoloRunLog;
@@ -18,6 +19,8 @@ pub(crate) struct YoloFlowTrace {
     pub original_user_prompt: String,
     pub final_status: String,
     pub stop_reason: Option<YoloStopReason>,
+    pub infrastructure_warnings: Vec<String>,
+    pub unavailable_tool_attempts: Vec<UnavailableToolAttempt>,
     pub rounds: Vec<YoloFlowRound>,
     pub round_chaining: RoundChainingAnalysis,
     pub quality_signals: YoloFlowQualitySignals,
@@ -144,8 +147,10 @@ pub(crate) fn build_flow_trace(run: &YoloRunLog) -> YoloFlowTrace {
         base_url: run.base_url.clone(),
         iteration_limit: run.iteration_limit,
         original_user_prompt: run.original_prompt.clone(),
-        final_status: analysis.final_status,
+        final_status: analysis.final_status.clone(),
         stop_reason: run.stop_reason.clone(),
+        infrastructure_warnings: analysis.infrastructure_warnings.clone(),
+        unavailable_tool_attempts: analysis.unavailable_tool_attempts.clone(),
         rounds,
         round_chaining: analysis.round_chaining,
         quality_signals,
@@ -167,6 +172,26 @@ pub(crate) fn flow_trace_markdown(trace: &YoloFlowTrace) -> String {
         trace.stop_reason,
         trace.final_status
     ));
+    list(
+        &mut out,
+        "Infrastructure Warnings",
+        &trace.infrastructure_warnings,
+    );
+    let unavailable_tool_attempts = trace
+        .unavailable_tool_attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "round {} `{}` blocking={} {}",
+                attempt.round, attempt.tool_or_server, attempt.blocking, attempt.message
+            )
+        })
+        .collect::<Vec<_>>();
+    list(
+        &mut out,
+        "Unavailable Tool Attempts",
+        &unavailable_tool_attempts,
+    );
     out.push_str("## Original User Prompt\n\n```text\n");
     out.push_str(&trace.original_user_prompt);
     out.push_str("\n```\n\n");
@@ -357,5 +382,31 @@ mod tests {
 
         let json = serde_json::to_string_pretty(&trace).expect("flow trace serializes");
         serde_json::from_str::<serde_json::Value>(&json).expect("flow trace is valid JSON");
+    }
+
+    #[test]
+    fn flow_trace_records_unavailable_tool_attempts() {
+        let mut first = iteration(1, "first", None);
+        first.errors = vec!["resources/read failed: unknown MCP server 'git'".to_string()];
+
+        let trace = build_flow_trace(&run(vec![first]));
+
+        assert_eq!(trace.final_status, "success_with_warnings");
+        assert_eq!(trace.infrastructure_warnings.len(), 1);
+        assert_eq!(
+            trace.unavailable_tool_attempts,
+            vec![UnavailableToolAttempt {
+                round: 1,
+                tool_or_server: "git".to_string(),
+                message: "resources/read failed: unknown MCP server 'git'".to_string(),
+                blocking: false,
+            }]
+        );
+
+        let json = serde_json::to_string_pretty(&trace).expect("flow trace serializes");
+        let value =
+            serde_json::from_str::<serde_json::Value>(&json).expect("flow trace is valid JSON");
+        assert!(value.get("infrastructureWarnings").is_some());
+        assert!(value.get("unavailableToolAttempts").is_some());
     }
 }

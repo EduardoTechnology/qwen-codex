@@ -39,12 +39,23 @@ pub(crate) struct YoloRunAnalysis {
     pub completed_iterations: usize,
     pub stop_reason: Option<YoloStopReason>,
     pub final_status: String,
+    pub infrastructure_warnings: Vec<String>,
+    pub unavailable_tool_attempts: Vec<UnavailableToolAttempt>,
     pub original_prompt_preview: String,
     pub rounds: Vec<YoloRoundAnalysis>,
     pub round_chaining: RoundChainingAnalysis,
     pub secret_redaction: SecretRedactionAnalysis,
     pub project_artifacts: ProjectArtifactsAnalysis,
     pub diagnostics: DiagnosticsAnalysis,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct UnavailableToolAttempt {
+    pub round: u32,
+    pub tool_or_server: String,
+    pub message: String,
+    pub blocking: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -202,6 +213,16 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
     let project_artifacts = analyze_project_artifacts(run);
     let diagnostics = analyze_diagnostics(run);
     let secret_redaction = analyze_secret_redaction(run);
+    let unavailable_tool_attempts = analyze_unavailable_tool_attempts(run);
+    let infrastructure_warnings = unavailable_tool_attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "round {}: unavailable MCP tool/server `{}`: {}",
+                attempt.round, attempt.tool_or_server, attempt.message
+            )
+        })
+        .collect();
 
     YoloRunAnalysis {
         run_id: run.run_id.clone(),
@@ -223,7 +244,9 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
         reject_stop_on_failed_acceptance: run.reject_stop_on_failed_acceptance,
         completed_iterations: run.iterations.len(),
         stop_reason: run.stop_reason.clone(),
-        final_status: final_status(run).to_string(),
+        final_status: final_status(run, &unavailable_tool_attempts, &secret_redaction).to_string(),
+        infrastructure_warnings,
+        unavailable_tool_attempts,
         original_prompt_preview: preview(&run.original_prompt),
         rounds,
         round_chaining,
@@ -339,6 +362,29 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         "File validation",
         &analysis.diagnostics.file_validation,
     );
+    list(
+        &mut out,
+        "Infrastructure warnings",
+        &analysis.infrastructure_warnings,
+    );
+    let unavailable_tool_attempts = analysis
+        .unavailable_tool_attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "round {} `{}` blocking={} {}",
+                attempt.round,
+                attempt.tool_or_server,
+                attempt.blocking,
+                preview(&attempt.message)
+            )
+        })
+        .collect::<Vec<_>>();
+    list(
+        &mut out,
+        "Unavailable tool attempts",
+        &unavailable_tool_attempts,
+    );
     out.push_str("\n## Action Diagnostics\n\n");
     out.push_str(
         "| Round | Actions | Tool calls | Commands | Files | Timeout % | Near timeout | No-action round | Unproductive round | Stop signal |\n",
@@ -362,6 +408,7 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
     out.push_str("\n## Final Recommendation\n\n");
     out.push_str(match analysis.final_status.as_str() {
         "success" => "PASS\n",
+        "success_with_warnings" => "PASS_WITH_WARNINGS\n",
         "partial" => "PARTIAL\n",
         "timeout" => "NEEDS_RERUN_WITH_LONGER_TIMEOUT\n",
         "interrupted" => "PARTIAL\n",
@@ -485,6 +532,22 @@ fn analyze_diagnostics(run: &YoloRunLog) -> DiagnosticsAnalysis {
     diagnostics
 }
 
+fn analyze_unavailable_tool_attempts(run: &YoloRunLog) -> Vec<UnavailableToolAttempt> {
+    run.iterations
+        .iter()
+        .flat_map(|iteration| {
+            iteration.errors.iter().filter_map(|error| {
+                unavailable_tool_or_server(error).map(|tool_or_server| UnavailableToolAttempt {
+                    round: iteration.iteration,
+                    tool_or_server,
+                    message: preview(error),
+                    blocking: false,
+                })
+            })
+        })
+        .collect()
+}
+
 fn analyze_secret_redaction(run: &YoloRunLog) -> SecretRedactionAnalysis {
     let serialized = serde_json::to_string(run)
         .unwrap_or_default()
@@ -497,18 +560,20 @@ fn analyze_secret_redaction(run: &YoloRunLog) -> SecretRedactionAnalysis {
     }
 }
 
-fn final_status(run: &YoloRunLog) -> &'static str {
+fn final_status(
+    run: &YoloRunLog,
+    unavailable_tool_attempts: &[UnavailableToolAttempt],
+    secret_redaction: &SecretRedactionAnalysis,
+) -> &'static str {
     match run.stop_reason.as_ref() {
-        Some(YoloStopReason::IterationLimitReached | YoloStopReason::RefinerStopSignal)
-            if run
-                .iterations
-                .iter()
-                .all(|iteration| iteration.errors.is_empty()) =>
-        {
-            "success"
-        }
         Some(YoloStopReason::IterationLimitReached | YoloStopReason::RefinerStopSignal) => {
-            "partial"
+            if has_blocking_project_failure(run, secret_redaction) {
+                "partial"
+            } else if !unavailable_tool_attempts.is_empty() {
+                "success_with_warnings"
+            } else {
+                "success"
+            }
         }
         Some(YoloStopReason::RoundTimeout) => "timeout",
         Some(YoloStopReason::Interrupted) => "interrupted",
@@ -520,6 +585,74 @@ fn final_status(run: &YoloRunLog) -> &'static str {
         ) => "failed",
         None => "partial",
     }
+}
+
+fn has_blocking_project_failure(
+    run: &YoloRunLog,
+    secret_redaction: &SecretRedactionAnalysis,
+) -> bool {
+    if secret_redaction.leaks_detected {
+        return true;
+    }
+    run.iterations.iter().any(|iteration| {
+        iteration.timeout_occurred
+            || iteration.interrupt_received
+            || !iteration.agent_finished_normally
+            || iteration.refiner_error.is_some()
+            || has_failed_result(&iteration.external_verification)
+            || has_failed_result(&iteration.acceptance_results)
+            || iteration
+                .errors
+                .iter()
+                .any(|error| unavailable_tool_or_server(error).is_none())
+    })
+}
+
+fn has_failed_result(results: &[ExternalVerificationResult]) -> bool {
+    results.iter().any(|result| result.exit_code != Some(0))
+}
+
+fn unavailable_tool_or_server(message: &str) -> Option<String> {
+    let lower = message.to_ascii_lowercase();
+    let is_unavailable_mcp = [
+        "unknown mcp server",
+        "mcp server not found",
+        "unknown mcp resource",
+        "mcp resource not found",
+        "unavailable mcp tool",
+        "unknown mcp tool",
+        "mcp tool not found",
+        "mcp server",
+        "mcp tool",
+    ]
+    .into_iter()
+    .any(|pattern| lower.contains(pattern))
+        && (lower.contains("unknown")
+            || lower.contains("not found")
+            || lower.contains("unavailable")
+            || lower.contains("failed"));
+    if !is_unavailable_mcp {
+        return None;
+    }
+    for candidate in ["git", "filesystem"] {
+        if lower.contains(candidate) {
+            return Some(candidate.to_string());
+        }
+    }
+    for quote in ['\'', '"', '`'] {
+        let Some(start) = message.find(quote) else {
+            continue;
+        };
+        let rest = &message[start + quote.len_utf8()..];
+        let Some(end) = rest.find(quote) else {
+            continue;
+        };
+        let value = rest[..end].trim();
+        if !value.is_empty() && value.len() <= 80 {
+            return Some(value.to_string());
+        }
+    }
+    Some("unknown".to_string())
 }
 
 fn refiner_skipped_reason_name(reason: &RefinerSkippedReason) -> String {
@@ -710,6 +843,15 @@ mod tests {
         }
     }
 
+    fn verification_result(command: &str, exit_code: i32) -> ExternalVerificationResult {
+        ExternalVerificationResult {
+            command: command.to_string(),
+            exit_code: Some(exit_code),
+            output: String::new(),
+            duration_ms: 1,
+        }
+    }
+
     #[test]
     fn analysis_reports_round_chaining_for_normal_run() {
         let mut first = iteration(1, "first");
@@ -738,6 +880,61 @@ mod tests {
         assert_eq!(analysis.rounds[0].timeout_utilization_percent, 0);
         assert!(!analysis.rounds[0].round_duration_near_timeout);
         assert_eq!(analysis.rounds[0].next_prompt_validation_passed, Some(true));
+    }
+
+    #[test]
+    fn analysis_reports_success_with_warnings_for_unavailable_mcp_when_acceptance_passes() {
+        let mut iteration = iteration(1, "first");
+        iteration.errors = vec!["resources/read failed: unknown MCP server 'git'".to_string()];
+        iteration.acceptance_gate_enabled = true;
+        iteration.acceptance_commands = vec!["curl -fsS http://localhost:2226/health".to_string()];
+        iteration.acceptance_results = vec![verification_result(
+            "curl -fsS http://localhost:2226/health",
+            0,
+        )];
+
+        let analysis =
+            build_run_analysis(&run(vec![iteration], YoloStopReason::IterationLimitReached));
+
+        assert_eq!(analysis.final_status, "success_with_warnings");
+        assert_eq!(
+            analysis.unavailable_tool_attempts,
+            vec![UnavailableToolAttempt {
+                round: 1,
+                tool_or_server: "git".to_string(),
+                message: "resources/read failed: unknown MCP server 'git'".to_string(),
+                blocking: false,
+            }]
+        );
+        assert_eq!(
+            analysis.infrastructure_warnings,
+            vec![
+                "round 1: unavailable MCP tool/server `git`: resources/read failed: unknown MCP server 'git'"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn analysis_keeps_partial_status_for_unavailable_mcp_when_acceptance_fails() {
+        let mut iteration = iteration(1, "first");
+        iteration.errors = vec!["tools/call failed: unknown MCP server 'filesystem'".to_string()];
+        iteration.acceptance_gate_enabled = true;
+        iteration.acceptance_commands = vec!["curl -fsS http://localhost:2226/health".to_string()];
+        iteration.acceptance_results = vec![verification_result(
+            "curl -fsS http://localhost:2226/health",
+            1,
+        )];
+
+        let analysis =
+            build_run_analysis(&run(vec![iteration], YoloStopReason::IterationLimitReached));
+
+        assert_eq!(analysis.final_status, "partial");
+        assert_eq!(
+            analysis.unavailable_tool_attempts[0].tool_or_server,
+            "filesystem"
+        );
+        assert!(!analysis.unavailable_tool_attempts[0].blocking);
     }
 
     #[test]

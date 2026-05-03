@@ -24,7 +24,7 @@ use crate::yolo::agent::tail;
 use crate::yolo::file_validation::acceptance_feedback;
 use crate::yolo::file_validation::collect_file_validation_summary;
 use crate::yolo::file_validation::is_blocking_feedback;
-use crate::yolo::guidance::QWEN_SAFE_FILE_WRITE_GUIDANCE;
+use crate::yolo::guidance::qwen_yolo_local_guidance;
 use crate::yolo::logging::YoloLogger;
 use crate::yolo::logging::new_run_id;
 use crate::yolo::logging::now_timestamp;
@@ -747,6 +747,7 @@ Next prompt contract:
 - Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
 - Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
 - For local Qwen file repairs, include the safe-write and validation constraints from the context.
+- If MCP `git` or `filesystem` is unavailable, use safe shell fallbacks and do not request that MCP server again.
 - If file validation reports invalid JSON/JS/YAML, JS module mismatch, or `http://backend:` in frontend code, ask for the smallest repair to the named file and the exact validation command; do not request a broad rewrite.
 - If files changed but validation is missing, prioritize running the missing validation before more feature work.
 - If any external verification failed, target that failure before adding unrelated scope.
@@ -762,7 +763,7 @@ Next prompt contract:
 Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless the acceptance evidence proves the project is complete."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
-        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
+        safe_file_write_guidance = qwen_yolo_local_guidance(),
         summary = tail(
             &iteration.agent_output_summary,
             REFINER_AGENT_SUMMARY_MAX_CHARS
@@ -982,6 +983,7 @@ Constraints for the next prompt:
 - Run at most {max_tests} verification commands.
 - Keep Docker/web checks focused and bounded.
 - For JSON/JS/TS/HTML/CSS/YAML edits, include safe write methods and exact validation commands.
+- If MCP `git` or `filesystem` is unavailable, use safe shell fallbacks such as `git status`, `ls`, `find`, `cat`, `python3`, `node`, and `docker compose`.
 - Do not emit YOLO_STOP."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
@@ -1001,7 +1003,7 @@ Constraints for the next prompt:
             REFINER_LIST_ITEM_MAX_CHARS,
             1_200
         ),
-        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
+        safe_file_write_guidance = qwen_yolo_local_guidance(),
         max_files = iteration.round_budget.max_files,
         max_actions = iteration.round_budget.max_actions,
         max_tests = iteration.round_budget.max_tests,
@@ -1045,7 +1047,7 @@ Stop this agent round after the failed acceptance check is fixed or the remainin
         max_actions = iteration.round_budget.max_actions,
         max_tests = iteration.round_budget.max_tests,
         commands = acceptance_commands_for_prompt(iteration),
-        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
+        safe_file_write_guidance = qwen_yolo_local_guidance(),
     )
 }
 
@@ -1214,11 +1216,12 @@ YOLO round 1 execution constraints:
 - Aim for at most {max_actions} concrete implementation actions.
 - Run at most {max_tests} verification commands.
 - Do not broaden scope beyond the requested project.
+- If MCP `git` or `filesystem` is unavailable, use safe shell fallbacks instead of requesting that MCP server again.
 - Stop after completing this bounded round and summarizing verification results."#,
         max_files = budget.max_files,
         max_actions = budget.max_actions,
         max_tests = budget.max_tests,
-        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
+        safe_file_write_guidance = qwen_yolo_local_guidance(),
     )
 }
 
@@ -1329,6 +1332,8 @@ Stop after the scoped task is complete and verification is summarized."#
         assert!(prompt.contains("Build an app"));
         assert!(prompt.contains("first bounded round"));
         assert!(prompt.contains("Qwen local safe file writing"));
+        assert!(prompt.contains("Qwen local MCP fallback"));
+        assert!(prompt.contains("git status"));
         assert!(prompt.contains("Path(\"file\").write_text"));
         assert!(prompt.contains("python3 -m json.tool file"));
         assert!(prompt.contains("node --check file"));
@@ -2211,6 +2216,8 @@ Stop after the scoped task is complete and verification is summarized."#
 
         assert!(summary.contains("File validation feedback:"));
         assert!(summary.contains("Qwen local safe file writing"));
+        assert!(summary.contains("Qwen local MCP fallback"));
+        assert!(summary.contains("safe shell fallbacks"));
         assert!(summary.contains("backend/server.js: JS syntax check failed"));
         assert!(summary.contains("acceptance commands not run yet"));
         assert!(summary.contains("ask for the smallest repair to the named file"));
