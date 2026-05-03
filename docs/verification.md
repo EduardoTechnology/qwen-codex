@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-02T21:48:09Z
+Last updated: 2026-05-02T23:58:10Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -113,23 +113,99 @@ Capability table:
 | File creation | PASS | PASS | PASS | Normal `hello.txt` and `add.py`; YOLO `tools-test.txt`; stress `README.md`, `cli.py`, `test_cli.py`. | None found for simple file creation. |
 | File reading | PASS | PASS | PASS | Normal read prompt output referenced `HELLO_QWEN_CODEX`; YOLO diagnostic ran `cat /tmp/qwen-yolo-tool-diagnostic/tools-test.txt`. | In YOLO, file-read evidence is command/action logging, not `toolCallsSummary`. |
 | File editing | PASS | PASS | PASS | Normal edited `hello.txt` to `HELLO_QWEN_CODEX_EDITED`; 10-round YOLO stress updated the notes project across all rounds. | No isolated YOLO edit-only test was run beyond project iteration. |
-| Multi-file project | PARTIAL | PARTIAL | PARTIAL | Normal mode created `package.json`, `README.md`, and `src/server.js`; YOLO stress built a working notes CLI project. YOLO mini project created `README.md`, `notes.py`, and `test_notes.py`. | Normal Express test failed the exact check because `server.js` was under `src/` while `package.json` starts `node server.js`. YOLO mini run hit `round_timeout` and produced failing tests. |
+| Multi-file project | PARTIAL | PARTIAL | PARTIAL | Normal mode created `package.json`, `README.md`, and `src/server.js`; YOLO stress built a working notes CLI project. YOLO mini project created `README.md`, `notes.py`, and `test_notes.py`. The full-stack YOLO run produced backend/frontend Docker scaffolding. | Normal Express test failed the exact check because `server.js` was under `src/` while `package.json` starts `node server.js`. YOLO mini run hit `round_timeout` and produced failing tests. The full-stack run timed out in round 6 and left the backend crashing from an ES module/package mismatch. |
 | Web search | PARTIAL | NOT_TESTED | CAPABILITY_MISSING for native web search | Normal prompt used shell `curl` against `https://nodejs.org/dist/index.json` and found `v24.15.0` LTS `Krypton`. | No dedicated `web_search`/browser tool was exposed or used in this local environment. Shell network fetch works, but that is not native web-search parity. |
 | PDF generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.pdf`: `PDF document, version 1.4, 1 page(s)`. | Text extraction was not available because `pdftotext` is not installed. |
 | DOCX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.docx`: `Microsoft Word 2007+`; `word/document.xml` contains the requested sentence. | Normal-mode shell/file workflow can create DOCX, but there is no dedicated document helper. |
 | XLSX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.xlsx`: `Microsoft Excel 2007+`; `xl/worksheets/sheet1.xml` contains `Name`, `Age`, `City`, `Alice`, `30`, and `Lisbon`. | Normal-mode shell/file workflow can create XLSX, but there is no dedicated spreadsheet helper. |
-| Docker compose workflow | NOT_TESTED in this pass | PASS | PASS | Prior six-round ecommerce acceptance-gated run passed `docker compose config`, `docker compose build`, backend `/health`, backend `/api/products`, and frontend `/`. | Docker rounds can still consume most of the timeout and need narrower prompts. |
-| YOLO round chaining | N/A | PASS | PASS | 10-round stress and YOLO mini both report `allRoundInputsMatchPreviousNextPrompt=true`. | None found in logged handoffs. |
+| Docker compose workflow | NOT_TESTED in this pass | PASS/PARTIAL | PASS for ecommerce; PARTIAL for latest full-stack stress | Prior six-round ecommerce acceptance-gated run passed `docker compose config`, `docker compose build`, backend `/health`, backend `/api/products`, and frontend `/`. The latest full-stack run passed `docker compose config` and `docker compose build`, but backend `/health` and `/api/items` failed after `up -d`. | Docker rounds can still consume most of the timeout and need narrower prompts. The latest backend failure was generated-app quality, not a qwen-codex tool/logging failure. |
+| YOLO round chaining | N/A | PASS | PASS | 10-round stress and YOLO mini both report `allRoundInputsMatchPreviousNextPrompt=true`. The full-stack `flow_trace.json` also reports `allRoundInputsMatchPreviousNextPrompt=true` through six logged rounds. | None found in logged handoffs. |
 | Acceptance gate | N/A | PASS/PARTIAL | PARTIAL | Focused tests cover rejected `YOLO_STOP`; ecommerce acceptance gate passed real compose/build/runtime checks; fixed-iteration final acceptance behavior is covered. | Live impossible-acceptance run did not trigger a refiner `YOLO_STOP`, so the live rejected-stop path remains unobserved. |
 | Infinite mode | N/A | PASS | PASS | Focused tests cover omitted `--iterations` as infinite config and safety stops. | Live infinite run was not left unbounded; stability was exercised with bounded stress. |
 | Context/auto-compact | PASS config propagation | PASS config propagation | CONTEXT-PRESSURE-BLOCKED | Normal logs show `context_window=32768 auto_compact_token_limit=26214`. The 10-round stress had no provider/context errors. The compact-pressure attempt hit `round_timeout` in the first YOLO round after creating 12 text files. | No actual compaction event was observed; the best-effort pressure run was blocked by long single-round model behavior. |
-| Tool/action logging semantics | PASS | PASS | PASS | Code inspection and YOLO diagnostics show shell/file actions in `actionsTaken`, `commandsTestsRun`, and `filesChanged`; `toolCallsSummary` tracks `mcp_tool_call`, `collab_tool_call`, and `web_search` items. | `toolCallsSummary=[]` is not a shell/file no-op signal. Consumers should use the canonical action fields. |
+| Tool/action logging semantics | PASS | PASS | PASS | Code inspection and YOLO diagnostics show shell/file actions in `actionsTaken`, `commandsTestsRun`, and `filesChanged`; `toolCallsSummary` tracks `mcp_tool_call`, `collab_tool_call`, and `web_search` items. YOLO now writes `flow_trace.json` and `flow_trace.md` for whole-run agent/refiner/nextPrompt review. | `toolCallsSummary=[]` is not a shell/file no-op signal. Consumers should use the canonical action fields. `filesChanged` reflects the changed workspace state visible to git and can repeat uncommitted paths across rounds. |
 
 PR-readiness classification:
 
 - PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and the 10-round stress run without provider/context errors.
 - PARTIAL: larger multi-file scaffolds with local Qwen can still produce small consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but the best-effort context-pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests only.
+- PARTIAL: the 10-round full-stack refiner evaluation completed six logged rounds, proved round chaining and flow tracing, then stopped safely with `round_timeout` during a long local-model Docker turn. The generated app passed compose config/build and served the frontend page, but backend runtime endpoints failed because the backend used ESM `import` syntax without `"type": "module"`.
 - CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` is a useful fallback when network is allowed, but it is not a native web-search pass.
+
+## YOLO 10-Round Fullstack Refiner Evaluation
+
+Run date: 2026-05-02.
+
+Run paths:
+
+```text
+Workspace: /tmp/qwen-yolo-fullstack-10
+Run logs: /tmp/qwen-yolo-fullstack-10/.qwen-codex/yolo-runs/20260502T232422Z-1560909
+Windows copy: /mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/fullstack-10/20260502T232422Z-1560909
+```
+
+Command shape:
+
+```text
+qwen-codex --yolo-refiner --iterations 10 --yolo-round-timeout-secs 1200 --yolo-acceptance-gate --yolo-acceptance-command "docker compose config" --yolo-acceptance-command "docker compose build" --yolo-acceptance-command "<docker compose up/curl/down check>" --dangerously-bypass-approvals-and-sandbox "<minimal full-stack React/Express/Docker prompt>"
+```
+
+Result classification: `PARTIAL`.
+
+Log validation:
+
+- `run.json`: valid JSON.
+- `analysis.json`: valid JSON.
+- `flow_trace.json`: valid JSON.
+- `flow_trace.md`: written and readable.
+- Secret redaction: `PASS`; no `local-dev-key` or `authorization:` header appeared in the run logs.
+- `flow_trace.json.originalUserPrompt`: present.
+- `flow_trace.json.rounds[].agentInputPrompt`: present for every logged round.
+- `flow_trace.json.rounds[].refinerRequestSummary`, `refinerResponse`, and `nextPrompt`: present for rounds 1-5.
+- Round 6 timed out before refiner handoff, so no refiner request/response/nextPrompt was expected or recorded for that round.
+- Round chaining: `PASS`; round 2 through round 6 inputs matched the previous round's `nextPrompt`, and `flow_trace.json.roundChaining.allRoundInputsMatchPreviousNextPrompt=true`.
+
+Run outcome:
+
+- Completed iterations: `6`.
+- Stop reason: `round_timeout`.
+- Final status: `timeout`.
+- Unproductive rounds: none. `flow_trace.json.qualitySignals.unproductiveRounds=[]`.
+- Error rounds: round 6 only, `agent round timed out after 1200 second(s)`.
+- Near-timeout rounds: round 6 only.
+- Acceptance gate: configured, but not reached because the run timed out before `max_iterations` or accepted `YOLO_STOP`.
+
+Round-by-round refiner quality:
+
+| Round | Agent objective | Agent result | Refiner next step | Followed previous nextPrompt? | Productive? | Project improvement |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Create the initial minimal full-stack app scaffold. | Created `backend/`, `frontend/`, and `docker-compose.yml`; command/action capture present. | Fix malformed Docker Compose and package syntax. | N/A | Yes | Established initial scaffold, but with malformed content. |
+| 2 | Fix malformed Compose/package syntax. | Updated scaffold files and ran commands. | Fix corrupted file content and verify Docker build. | Yes | Yes | Continued toward buildable scaffold. |
+| 3 | Fix corrupted file content and verify Docker build. | Updated the same project areas; action count exceeded the soft round budget but completed. | Create missing project scaffolding and verify Docker build. | Yes | Yes | Refiner identified remaining scaffold/build blocker, but repeated earlier context somewhat. |
+| 4 | Create missing scaffolding and verify Docker build. | Performed one captured command/action and kept focus on Docker build. | Fix Docker build failure and verify services start. | Yes | Yes | Moved from scaffold creation toward runtime verification. |
+| 5 | Fix Docker build failure and verify services start. | Ran a larger Docker/runtime fix round; backend and frontend images became buildable. | Fix Docker Compose configuration and verify services start. | Yes | Yes | Project reached `docker compose build` passability and frontend static serving. |
+| 6 | Fix Docker Compose configuration and verify services start. | Timed out after 1200 seconds before returning a final agent message. | None; refiner was skipped because of timeout. | Yes | Timeout, not unproductive | Backend briefly became reachable during the round, but final generated backend still crashed after rerun. |
+
+Manual project verification after the run:
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| `docker compose config` | PASS | Compose rendered two services on ports `2225` and `2226`; only Docker's obsolete `version` warning appeared. |
+| `docker compose build` | PASS | Both `qwen-yolo-fullstack-10-backend` and `qwen-yolo-fullstack-10-frontend` images built. |
+| `docker compose up -d` | PARTIAL | Both containers started, but the backend exited shortly after startup. |
+| Backend `/health` | FAIL | `curl` to `http://localhost:2226/health` failed after startup; backend logs show `SyntaxError: Cannot use import statement outside a module`. |
+| Backend `/api/items` | FAIL | Not reachable for the same backend crash. |
+| Frontend `/` | PASS | `curl http://localhost:2225 | grep -i item` found the item management page. |
+| Browser URL check | PASS | No `http://backend:` URL was found under `frontend/`. |
+| README | FAIL | `README.md` was not created before timeout. |
+
+Conclusion:
+
+- The refiner loop was useful across the completed handoffs: it observed scaffold/build/runtime blockers and generated concrete next prompts that were injected into the following agent rounds.
+- The refiner repeated stale "Round 1" context in multiple prompts and did not fully stay within the soft action budget, but it stayed focused on Docker runtime blockers rather than adding unrelated features.
+- The flow trace artifact clearly shows the user prompt, each agent input, refiner request summary, raw refiner response, next prompt, and chaining proof through the completed handoffs.
+- The generated app quality remained partial. The backend failure is a generated-project bug, not a qwen-codex infrastructure bug.
+- The live run reconfirms the remaining limitation: local Qwen Docker rounds can still become long single-agent turns and hit the safe timeout before completing all requested rounds.
 
 Normal-mode capability suite workspace:
 

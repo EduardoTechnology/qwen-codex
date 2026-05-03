@@ -14,7 +14,7 @@ Includes:
 - round timeout, failure guards, repeated prompt guard, and Ctrl+C handling
 - round budget controls and next-prompt validation/repair
 - acceptance gate with focused tests
-- JSON/Markdown YOLO logs, `analysis.json`, action diagnostics, and redaction
+- JSON/Markdown YOLO logs, `analysis.json`, `flow_trace.json`, action diagnostics, and redaction
 - docs for upstream sync and local model setup
 
 ## Verification
@@ -47,12 +47,14 @@ Verified capabilities:
 - YOLO infinite mode: PASS
 - acceptance gate: PASS
 - 10-round YOLO stress: PASS
+- full-stack YOLO/refiner flow trace: PARTIAL/PASS for logging and chaining, timeout before all 10 rounds
 - context config propagation: PASS
 
 ## Known Limitations
 
 - Native `web_search`/`browser` tool is unavailable in the tested local environment. Shell `curl` can access known URLs, but it is not native search/browser parity.
 - Larger local-Qwen scaffold tasks can still produce small consistency bugs, such as package scripts pointing to the wrong generated entrypoint.
+- The latest full-stack YOLO/refiner evaluation wrote valid `flow_trace.json`, proved chaining through six rounds, then stopped safely with `round_timeout`; generated backend runtime checks failed because the app used ESM `import` syntax without `"type": "module"`.
 - Auto-compact config propagation is confirmed. The latest best-effort context-pressure run did not trigger actual compaction: `/tmp/qwen-yolo-compact/.qwen-codex/yolo-runs/20260502T213530Z-1376298` stopped with `round_timeout` in the first YOLO round after creating 12 bounded text files, with valid logs and no compaction marker.
 - Live rejected `YOLO_STOP` was not triggered by the model during live runs; focused tests cover the rejection and repair path.
 - Docker projects can produce long single-agent turns, especially when builds pull images.

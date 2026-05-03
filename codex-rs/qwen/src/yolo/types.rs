@@ -199,6 +199,8 @@ pub(crate) struct YoloIterationLog {
     pub files_changed_count: usize,
     pub no_action_round: bool,
     pub no_action_round_reason: Option<String>,
+    pub unproductive_round: bool,
+    pub unproductive_round_reason: Option<String>,
     pub current_git_status: String,
     pub interrupt_received: bool,
     pub timeout_occurred: bool,

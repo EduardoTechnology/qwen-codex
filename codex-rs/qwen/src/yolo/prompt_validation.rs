@@ -461,6 +461,8 @@ Verification commands:
         assert!(result.passed);
         assert!(result.repaired);
         assert!(result.prompt.chars().count() <= 1_500);
+        assert!(result.prompt.contains("backend/seed-data.js"));
+        assert!(result.prompt.contains("docker compose build backend"));
     }
 
     #[test]

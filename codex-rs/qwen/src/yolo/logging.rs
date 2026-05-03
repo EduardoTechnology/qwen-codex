@@ -10,6 +10,8 @@ use tokio::fs;
 use crate::redaction::redact_text;
 use crate::yolo::analysis::analysis_markdown;
 use crate::yolo::analysis::build_run_analysis;
+use crate::yolo::flow_trace::build_flow_trace;
+use crate::yolo::flow_trace::flow_trace_markdown;
 use crate::yolo::types::YoloIterationLog;
 use crate::yolo::types::YoloRunLog;
 
@@ -41,6 +43,16 @@ impl YoloLogger {
         write_text_redacted(
             &self.run_dir.join("analysis.md"),
             &analysis_markdown(&analysis),
+        )
+        .await
+    }
+
+    pub(crate) async fn write_flow_trace(&self, run: &YoloRunLog) -> anyhow::Result<()> {
+        let trace = build_flow_trace(run);
+        write_json_redacted(&self.run_dir.join("flow_trace.json"), &trace).await?;
+        write_text_redacted(
+            &self.run_dir.join("flow_trace.md"),
+            &flow_trace_markdown(&trace),
         )
         .await
     }
@@ -341,6 +353,8 @@ mod tests {
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -368,6 +382,39 @@ mod tests {
         serde_json::from_str::<Value>(&json).unwrap();
         assert!(json.contains("[REDACTED]"));
         assert!(!json.contains("sk_test_123456789abcdef"));
+
+        let run = YoloRunLog {
+            run_id: "run".to_string(),
+            started_at: "2026-05-02T00:00:00Z".to_string(),
+            completed_at: Some("2026-05-02T00:00:01Z".to_string()),
+            original_prompt: "QWEN_CODEX_API_KEY=secret-value".to_string(),
+            base_url: "http://127.0.0.1:8002/v1".to_string(),
+            model: "qwen35-local".to_string(),
+            iteration_limit: Some(1),
+            round_timeout_secs: 600,
+            round_budget: RoundBudget::default(),
+            continue_after_timeout: false,
+            allow_refiner_stop: true,
+            verify_commands: Vec::new(),
+            verify_timeout_secs: 15,
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_max_seconds: 300,
+            reject_stop_on_failed_acceptance: true,
+            max_repeated_prompts: 3,
+            max_failures: 3,
+            session_id: Some("session".to_string()),
+            stop_reason: Some(YoloStopReason::RefinerStopSignal),
+            iterations: vec![iteration],
+        };
+        logger.write_flow_trace(&run).await.unwrap();
+        let flow_json = fs::read_to_string(logger.run_dir().join("flow_trace.json"))
+            .await
+            .unwrap();
+        serde_json::from_str::<Value>(&flow_json).unwrap();
+        assert!(flow_json.contains("[REDACTED]"));
+        assert!(!flow_json.contains("secret-value"));
+        assert!(!flow_json.contains("sk_test_123456789abcdef"));
     }
 
     #[tokio::test]
@@ -408,6 +455,8 @@ mod tests {
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: true,
             timeout_occurred: false,

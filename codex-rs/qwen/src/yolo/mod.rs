@@ -44,6 +44,7 @@ use crate::yolo::verification::verification_summary;
 
 mod agent;
 mod analysis;
+mod flow_trace;
 mod logging;
 mod prompt_validation;
 mod refiner;
@@ -300,6 +301,8 @@ where
             files_changed_count: agent_result.changed_files.len(),
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status,
             interrupt_received,
             timeout_occurred,
@@ -321,6 +324,12 @@ where
         apply_action_diagnostics(&mut iteration_log, &agent_result);
         if iteration_log.no_action_round {
             if let Some(reason) = &iteration_log.no_action_round_reason {
+                iteration_log.errors.push(reason.clone());
+            }
+            consecutive_failures = consecutive_failures.saturating_add(1);
+        }
+        if iteration_log.unproductive_round && !iteration_log.no_action_round {
+            if let Some(reason) = &iteration_log.unproductive_round_reason {
                 iteration_log.errors.push(reason.clone());
             }
             consecutive_failures = consecutive_failures.saturating_add(1);
@@ -630,7 +639,8 @@ async fn finish_run(
 
 async fn write_run_and_analysis(logger: &YoloLogger, run_log: &YoloRunLog) -> anyhow::Result<()> {
     logger.write_run(run_log).await?;
-    logger.write_analysis(run_log).await
+    logger.write_analysis(run_log).await?;
+    logger.write_flow_trace(run_log).await
 }
 
 fn build_refiner_summary(iteration: &YoloIterationLog, round_timeout_secs: u64) -> String {
@@ -675,6 +685,10 @@ Action diagnostics:
 - commands captured: {commands_count}
 - files changed: {files_count}
 - no-action round: {no_action_round}
+- unproductive round: {unproductive_round}
+
+Unproductive round warning:
+{unproductive_warning}
 
 Round timing:
 - duration seconds: {duration_seconds}
@@ -743,6 +757,8 @@ Your role is to inspect the latest round, identify the most impactful remaining 
         commands_count = iteration.commands_captured_count,
         files_count = iteration.files_changed_count,
         no_action_round = iteration.no_action_round,
+        unproductive_round = iteration.unproductive_round,
+        unproductive_warning = unproductive_round_warning(iteration),
         duration_seconds = iteration.agent_round_duration_seconds,
         round_timeout_secs = round_timeout_secs,
         timeout_utilization_percent = timeout_utilization_percent,
@@ -1016,6 +1032,109 @@ fn apply_action_diagnostics(iteration: &mut YoloIterationLog, agent_result: &Age
         "agent completed the round without captured actions, commands, tool calls, or file changes"
             .to_string()
     });
+    iteration.unproductive_round_reason = classify_unproductive_round(iteration);
+    iteration.unproductive_round = iteration.unproductive_round_reason.is_some();
+}
+
+fn classify_unproductive_round(iteration: &YoloIterationLog) -> Option<String> {
+    if !iteration.agent_finished_normally
+        || verification_only_expected(&iteration.current_agent_input_prompt)
+    {
+        return None;
+    }
+    if !iteration.changed_files.is_empty() || !iteration.git_diff_summary.trim().is_empty() {
+        return None;
+    }
+    let commands_empty_or_trivial = iteration.commands_tests_run.is_empty()
+        || iteration
+            .commands_tests_run
+            .iter()
+            .all(|command| is_trivial_inspection_command(command));
+    let no_meaningful_actions = iteration.actions_captured_count == 0
+        || iteration
+            .actions_taken
+            .iter()
+            .all(|action| !meaningful_action(action));
+    (commands_empty_or_trivial && no_meaningful_actions).then(|| {
+        "agent finished normally but made no file changes, produced no git diff, and captured no meaningful commands or actions"
+            .to_string()
+    })
+}
+
+fn verification_only_expected(prompt: &str) -> bool {
+    let lower = prompt.to_ascii_lowercase();
+    let asks_for_verification = [
+        "verify",
+        "verification",
+        "inspect",
+        "review",
+        "read",
+        "check",
+        "summarize",
+    ]
+    .into_iter()
+    .any(|word| lower.contains(word));
+    let asks_for_change = [
+        "create",
+        "edit",
+        "modify",
+        "implement",
+        "build",
+        "add ",
+        "fix",
+        "delete",
+        "update",
+        "write ",
+    ]
+    .into_iter()
+    .any(|word| lower.contains(word));
+    asks_for_verification && !asks_for_change
+}
+
+fn meaningful_action(action: &str) -> bool {
+    if action.starts_with("file change:") {
+        return true;
+    }
+    if let Some(command) = action.strip_prefix("command:") {
+        return !is_trivial_inspection_command(command);
+    }
+    action.starts_with("web_search:")
+        || action.starts_with("mcp:")
+        || action.starts_with("collab:")
+        || !action.starts_with("event:")
+}
+
+fn is_trivial_inspection_command(command: &str) -> bool {
+    let command = command.trim();
+    let lower = command.to_ascii_lowercase();
+    let first = lower.split(['|', '&', ';']).next().unwrap_or("").trim();
+    first == "pwd"
+        || first == "ls"
+        || first.starts_with("ls ")
+        || first == "tree"
+        || first.starts_with("tree ")
+        || first == "git status"
+        || first.starts_with("git status ")
+        || first == "git diff --stat"
+        || first == "git diff --name-status"
+        || first == "rg --files"
+        || first.starts_with("rg --files ")
+        || first.starts_with("find ")
+        || first.starts_with("cat ")
+        || first.starts_with("sed ")
+        || first.starts_with("head ")
+        || first.starts_with("tail ")
+        || first.starts_with("wc ")
+        || first.starts_with("grep ")
+        || first.starts_with("rg ")
+}
+
+fn unproductive_round_warning(iteration: &YoloIterationLog) -> String {
+    if !iteration.unproductive_round {
+        return "- none".to_string();
+    }
+    "WARNING: previous round was unproductive. It created no files and made no meaningful changes. The next prompt must request a concrete, small file/code change and verification command."
+        .to_string()
 }
 
 fn claims_completion(value: &str) -> bool {
@@ -1209,6 +1328,18 @@ Stop after the scoped task is complete and verification is summarized."#
             iteration_log.errors,
             vec!["agent round timed out after 0 second(s)".to_string()]
         );
+
+        let flow_trace_json =
+            std::fs::read_to_string(outcome.run_dir.join("flow_trace.json")).unwrap();
+        let flow_trace: serde_json::Value = serde_json::from_str(&flow_trace_json).unwrap();
+        assert_eq!(flow_trace["finalStatus"], "timeout");
+        assert_eq!(flow_trace["stopReason"], "round_timeout");
+        assert_eq!(
+            flow_trace["rounds"][0]["agentInputPrompt"],
+            initial_round_prompt("Build a demo", &RoundBudget::default())
+        );
+        assert_eq!(flow_trace["rounds"][0]["refinerRequestSummary"], "");
+        assert_eq!(flow_trace["rounds"][0]["refinerResponse"], "");
     }
 
     #[tokio::test]
@@ -1725,6 +1856,8 @@ Stop after the scoped task is complete and verification is summarized."#
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -1759,6 +1892,7 @@ Stop after the scoped task is complete and verification is summarized."#
         assert_eq!(iteration.commands_captured_count, 1);
         assert_eq!(iteration.files_changed_count, 1);
         assert!(!iteration.no_action_round);
+        assert!(!iteration.unproductive_round);
     }
 
     #[test]
@@ -1792,6 +1926,8 @@ Stop after the scoped task is complete and verification is summarized."#
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -1820,6 +1956,138 @@ Stop after the scoped task is complete and verification is summarized."#
 
         assert!(iteration.no_action_round);
         assert!(iteration.no_action_round_reason.is_some());
+        assert!(iteration.unproductive_round);
+        assert!(iteration.unproductive_round_reason.is_some());
+    }
+
+    #[test]
+    fn yolo_action_diagnostics_do_not_mark_expected_verification_round_unproductive() {
+        let mut iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "Verify the project state and summarize the result."
+                .to_string(),
+            agent_output_summary: "summary".to_string(),
+            actions_taken: vec!["command: ls".to_string()],
+            tool_calls_summary: Vec::new(),
+            changed_files: Vec::new(),
+            git_diff_summary: String::new(),
+            commands_tests_run: vec!["ls".to_string()],
+            errors: Vec::new(),
+            external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
+            current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
+            stop_reason: None,
+        };
+        let result = AgentRoundResult {
+            final_response: Some("Verified".to_string()),
+            actions_taken: iteration.actions_taken.clone(),
+            commands_tests_run: iteration.commands_tests_run.clone(),
+            exit_code: Some(0),
+            ..AgentRoundResult::default()
+        };
+
+        apply_action_diagnostics(&mut iteration, &result);
+
+        assert!(!iteration.unproductive_round);
+        assert_eq!(iteration.unproductive_round_reason, None);
+    }
+
+    #[test]
+    fn refiner_summary_warns_about_unproductive_round() {
+        let mut iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "Build a project".to_string(),
+            agent_output_summary: "summary".to_string(),
+            actions_taken: Vec::new(),
+            tool_calls_summary: Vec::new(),
+            changed_files: Vec::new(),
+            git_diff_summary: String::new(),
+            commands_tests_run: Vec::new(),
+            errors: Vec::new(),
+            external_verification: Vec::new(),
+            acceptance_gate_enabled: false,
+            acceptance_commands: Vec::new(),
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 0,
+            no_action_round: false,
+            no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
+            current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
+            stop_reason: None,
+        };
+        let result = AgentRoundResult {
+            final_response: Some("Done".to_string()),
+            exit_code: Some(0),
+            ..AgentRoundResult::default()
+        };
+        apply_action_diagnostics(&mut iteration, &result);
+
+        let summary = build_refiner_summary(&iteration, 600);
+
+        assert!(iteration.unproductive_round);
+        assert!(summary.contains("WARNING: previous round was unproductive"));
     }
 
     #[tokio::test]
@@ -1931,6 +2199,8 @@ Stop after the scoped task is complete and verification is summarized."#
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,
@@ -1988,6 +2258,8 @@ Stop after the scoped task is complete and verification is summarized."#
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: "status".repeat(10_000),
             interrupt_received: false,
             timeout_occurred: false,

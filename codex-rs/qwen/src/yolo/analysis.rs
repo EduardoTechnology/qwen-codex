@@ -74,6 +74,8 @@ pub(crate) struct YoloRoundAnalysis {
     pub files_changed_count: usize,
     pub no_action_round: bool,
     pub no_action_round_reason: Option<String>,
+    pub unproductive_round: bool,
+    pub unproductive_round_reason: Option<String>,
     pub refiner_was_called: bool,
     pub refiner_response_preview: Option<String>,
     pub next_prompt_preview: Option<String>,
@@ -170,6 +172,8 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
                 files_changed_count: iteration.files_changed_count,
                 no_action_round: iteration.no_action_round,
                 no_action_round_reason: iteration.no_action_round_reason.clone(),
+                unproductive_round: iteration.unproductive_round,
+                unproductive_round_reason: iteration.unproductive_round_reason.clone(),
                 refiner_was_called: iteration.refiner_raw_response.is_some(),
                 refiner_response_preview: iteration.refiner_raw_response.as_deref().map(preview),
                 next_prompt_preview: iteration
@@ -329,12 +333,12 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
     );
     out.push_str("\n## Action Diagnostics\n\n");
     out.push_str(
-        "| Round | Actions | Tool calls | Commands | Files | Timeout % | Near timeout | No-action round | Stop signal |\n",
+        "| Round | Actions | Tool calls | Commands | Files | Timeout % | Near timeout | No-action round | Unproductive round | Stop signal |\n",
     );
-    out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
+    out.push_str("| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n");
     for round in &analysis.rounds {
         out.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |\n",
             round.iteration,
             round.actions_captured_count,
             round.tool_calls_captured_count,
@@ -343,6 +347,7 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
             round.timeout_utilization_percent,
             round.round_duration_near_timeout,
             round.no_action_round,
+            round.unproductive_round,
             stop_signal_status(round)
         ));
     }
@@ -639,6 +644,8 @@ mod tests {
             files_changed_count: 0,
             no_action_round: false,
             no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
             current_git_status: String::new(),
             interrupt_received: false,
             timeout_occurred: false,

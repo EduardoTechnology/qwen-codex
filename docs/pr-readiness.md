@@ -1,6 +1,6 @@
 # PR Readiness
 
-Last updated: 2026-05-02T21:48:09Z
+Last updated: 2026-05-02T23:58:10Z
 
 ## Branch
 
@@ -19,6 +19,7 @@ Major features:
 - YOLO refiner mode with finite and infinite iteration semantics.
 - YOLO safety stops: accepted `YOLO_STOP`, Ctrl+C, round timeout, repeated prompts, repeated failures, agent/refiner/provider fatal errors, acceptance repair failure, and context/compaction fatal errors.
 - YOLO round chaining, structured JSON/Markdown logs, `analysis.json`, action diagnostics, timeout-utilization diagnostics, and secret redaction.
+- YOLO `flow_trace.json` and `flow_trace.md` for full user-prompt to agent/refiner/nextPrompt review.
 - Acceptance gate for real verification commands before accepting stop or final fixed-iteration success.
 
 ## Verified Model Setup
@@ -40,7 +41,7 @@ See [docs/verification.md](verification.md#final-capability-verification).
 Release classification:
 
 - PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and 10-round YOLO stress without provider/context errors.
-- PARTIAL: larger multi-file scaffolds can still have local-model consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but the best-effort pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests.
+- PARTIAL: larger multi-file scaffolds can still have local-model consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; the 10-round full-stack refiner evaluation completed six logged rounds and then stopped safely with `round_timeout`; auto-compact config propagation is confirmed but the best-effort pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests.
 - CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` can work when network is allowed, but it is not native web-search parity.
 
 ## Manual Evidence
@@ -54,6 +55,8 @@ Key run paths:
 - YOLO mini capability: `/tmp/qwen-yolo-capability/.qwen-codex/yolo-runs/20260502T204115Z-1279469`
 - Compact-pressure attempt: `/tmp/qwen-yolo-compact/.qwen-codex/yolo-runs/20260502T213530Z-1376298`
 - Windows copy of compact-pressure logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure/20260502T213530Z-1376298`
+- Full-stack 10-round refiner evaluation: `/tmp/qwen-yolo-fullstack-10/.qwen-codex/yolo-runs/20260502T232422Z-1560909`
+- Windows copy of full-stack refiner logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/fullstack-10/20260502T232422Z-1560909`
 - Ecommerce acceptance-gated verification: documented in [docs/verification.md](verification.md)
 
 ## Commands Passed
@@ -114,6 +117,7 @@ This branch currently has no common merge-base with the fetched `upstream/main` 
 - Native `web_search`/browser tooling is not available in the verified local environment.
 - Shell `curl` network access is a useful fallback but not native web-search parity.
 - Larger local-Qwen scaffold tasks can still produce small consistency bugs, such as package scripts pointing to the wrong generated entrypoint.
+- The latest full-stack YOLO/refiner evaluation proved flow tracing and round chaining through six rounds, but stopped with `round_timeout` during a long Docker/runtime agent turn. The generated backend then failed runtime checks because it used ESM `import` syntax without `"type": "module"`.
 - The final YOLO mini capability run timed out in round 3 and generated failing Python tests.
 - Auto-compact config propagation is confirmed, but no actual compaction event was triggered. The best-effort 15-round pressure attempt created 12 text files in one agent turn and then stopped safely with `round_timeout` before resumed-turn compaction pressure was reached.
 - Live rejected-`YOLO_STOP` was not triggered by the model, though focused tests cover acceptance-gate rejection and repair prompting.

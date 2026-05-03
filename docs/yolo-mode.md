@@ -210,6 +210,8 @@ run.json
 run.md
 analysis.json
 analysis.md
+flow_trace.json
+flow_trace.md
 iteration-001.json
 iteration-001.md
 iteration-002.json
@@ -225,7 +227,7 @@ Iteration logs include:
 - Current injected prompt
 - Agent output summary
 - Actions and tool-call summaries
-- Action diagnostics: `actionsCapturedCount`, `toolCallsCapturedCount`, `commandsCapturedCount`, `filesChangedCount`, and `noActionRound`
+- Action diagnostics: `actionsCapturedCount`, `toolCallsCapturedCount`, `commandsCapturedCount`, `filesChangedCount`, `noActionRound`, `unproductiveRound`, and `unproductiveRoundReason`
 - Changed files
 - Git diff summary
 - Commands/tests run
@@ -243,7 +245,7 @@ Iteration logs include:
 - Round budget used for that iteration
 - Stop reason when applicable
 
-For shell/file verification, the canonical fields are `actionsTaken`, `commandsTestsRun`, `filesChanged`, `actionsCapturedCount`, `commandsCapturedCount`, `filesChangedCount`, and `noActionRound`.
+For shell/file verification, the canonical fields are `actionsTaken`, `commandsTestsRun`, `filesChanged`, `actionsCapturedCount`, `commandsCapturedCount`, `filesChangedCount`, `noActionRound`, and `unproductiveRound`.
 
 `toolCallsSummary` is narrower. It records higher-level tool events exposed as `mcp_tool_call`, `collab_tool_call`, or `web_search` items. Built-in shell execution appears as `command_execution` and is summarized under `commandsTestsRun` and `actionsTaken`, while file changes appear under `filesChanged` and file-change action entries. Therefore `toolCallsSummary: []` does not mean the agent failed to use shell or file tools.
 
@@ -252,6 +254,10 @@ Secrets are redacted before logs are written. The redactor covers common API key
 JSON logs are redacted field-by-field before serialization, so raw newlines, ANSI escape sequences, interrupted output, and secret-like `.env` assignments remain valid JSON. Markdown logs are for human review only.
 
 `analysis.json` is a compact whole-run summary designed for automation. It includes completed iteration count, final status, per-round previews, refiner call status, acceptance-gate results, timeout utilization fields (`timeoutUtilizationPercent` and `roundDurationNearTimeout`), action/tool diagnostics, round-chaining checks, important project artifacts, secret-redaction checks, and diagnostics grouped as timeouts, interruptions, agent errors, provider errors, and refiner errors. `analysis.md` is the same review in a concise human-readable form.
+
+`flow_trace.json` is the machine-readable chronological trace for full-loop review. It includes the original user prompt, every agent input prompt, agent output summary, actions, commands, changed files, refiner request summary, raw refiner response, injected `nextPrompt`, prompt validation result, per-round next-prompt injection status, round-chaining proof, and quality signals such as unproductive rounds, error rounds, near-timeout rounds, and acceptance results. `flow_trace.md` is the same timeline in a human-readable form.
+
+An unproductive round means the agent finished normally but made no file changes, produced no git diff, and captured no meaningful commands or actions. Verification-only prompts that explicitly ask only to inspect or verify are not marked unproductive just because they avoid file changes. When a round is unproductive, the next refiner context includes a warning that the next prompt must request one concrete file/code change and a verification command.
 
 The refiner receives bounded context derived from the latest iteration summary, changed files, errors, git status, and diff summary. Qwen Codex avoids passing full raw logs or large shell heredocs into the refiner request.
 
