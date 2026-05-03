@@ -33,6 +33,7 @@ pub(crate) struct YoloFlowRound {
     pub commands_tests_run: Vec<String>,
     pub files_changed: Vec<String>,
     pub git_diff_summary: String,
+    pub file_validation_summary: Vec<String>,
     pub errors: Vec<String>,
     pub agent_finished_normally: bool,
     pub refiner_request_summary: String,
@@ -83,6 +84,7 @@ pub(crate) fn build_flow_trace(run: &YoloRunLog) -> YoloFlowTrace {
                 commands_tests_run: iteration.commands_tests_run.clone(),
                 files_changed: iteration.changed_files.clone(),
                 git_diff_summary: iteration.git_diff_summary.clone(),
+                file_validation_summary: iteration.file_validation_summary.clone(),
                 errors: iteration.errors.clone(),
                 agent_finished_normally: iteration.agent_finished_normally,
                 refiner_request_summary: iteration
@@ -193,6 +195,11 @@ pub(crate) fn flow_trace_markdown(trace: &YoloFlowTrace) -> String {
             &round.commands_tests_run,
         );
         list(&mut out, "Files Changed", &round.files_changed);
+        list(
+            &mut out,
+            "File Validation Summary",
+            &round.file_validation_summary,
+        );
         if !round.refiner_request_summary.is_empty() {
             section(
                 &mut out,
@@ -264,6 +271,7 @@ mod tests {
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: vec!["git status --short".to_string()],
             errors: Vec::new(),
             external_verification: Vec::new(),

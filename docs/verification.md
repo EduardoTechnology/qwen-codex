@@ -118,7 +118,7 @@ Capability table:
 | PDF generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.pdf`: `PDF document, version 1.4, 1 page(s)`. | Text extraction was not available because `pdftotext` is not installed. |
 | DOCX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.docx`: `Microsoft Word 2007+`; `word/document.xml` contains the requested sentence. | Normal-mode shell/file workflow can create DOCX, but there is no dedicated document helper. |
 | XLSX generation | PASS | NOT_TESTED | PASS | `/tmp/qwen-capability-suite/test.xlsx`: `Microsoft Excel 2007+`; `xl/worksheets/sheet1.xml` contains `Name`, `Age`, `City`, `Alice`, `30`, and `Lisbon`. | Normal-mode shell/file workflow can create XLSX, but there is no dedicated spreadsheet helper. |
-| Docker compose workflow | NOT_TESTED in this pass | PASS/PARTIAL | PASS for ecommerce; PARTIAL for latest full-stack stress | Prior six-round ecommerce acceptance-gated run passed `docker compose config`, `docker compose build`, backend `/health`, backend `/api/products`, and frontend `/`. The latest full-stack run passed `docker compose config` and `docker compose build`, but backend `/health` and `/api/items` failed after `up -d`. | Docker rounds can still consume most of the timeout and need narrower prompts. The latest backend failure was generated-app quality, not a qwen-codex tool/logging failure. |
+| Docker compose workflow | NOT_TESTED in this pass | PASS/PARTIAL | PASS for ecommerce and safe-write rerun; PARTIAL for 10-round full-stack stress | Prior six-round ecommerce acceptance-gated run passed `docker compose config`, `docker compose build`, backend `/health`, backend `/api/products`, and frontend `/`. The 10-round full-stack run passed compose config/build but backend `/health` and `/api/items` failed after `up -d`. The 4-round safe-write rerun manually passed package JSON validation, `node --check`, compose config/build/up, backend `/health`, backend `/api/items`, frontend `/`, and frontend URL checks. | Docker rounds can still consume much of the timeout and need narrower prompts. The 10-round backend failure was generated-app quality, not a qwen-codex tool/logging failure. The 4-round run ended with YOLO `partial` because the model attempted an unavailable `git` MCP read, but manual acceptance passed. |
 | YOLO round chaining | N/A | PASS | PASS | 10-round stress and YOLO mini both report `allRoundInputsMatchPreviousNextPrompt=true`. The full-stack `flow_trace.json` also reports `allRoundInputsMatchPreviousNextPrompt=true` through six logged rounds. | None found in logged handoffs. |
 | Acceptance gate | N/A | PASS/PARTIAL | PARTIAL | Focused tests cover rejected `YOLO_STOP`; ecommerce acceptance gate passed real compose/build/runtime checks; fixed-iteration final acceptance behavior is covered. | Live impossible-acceptance run did not trigger a refiner `YOLO_STOP`, so the live rejected-stop path remains unobserved. |
 | Infinite mode | N/A | PASS | PASS | Focused tests cover omitted `--iterations` as infinite config and safety stops. | Live infinite run was not left unbounded; stability was exercised with bounded stress. |
@@ -130,6 +130,7 @@ PR-readiness classification:
 - PASS: shell command execution, file creation, file reading, file editing, PDF generation, DOCX generation, XLSX generation, Docker compose workflow, YOLO chaining, YOLO infinite mode, acceptance-gate focused tests, and the 10-round stress run without provider/context errors.
 - PARTIAL: larger multi-file scaffolds with local Qwen can still produce small consistency bugs; the YOLO mini capability run timed out in round 3 and generated failing Python tests; auto-compact config propagation is confirmed but the best-effort context-pressure run was blocked before compaction; live rejected-`YOLO_STOP` was not triggered by the model and is covered by focused tests only.
 - PARTIAL: the 10-round full-stack refiner evaluation completed six logged rounds, proved round chaining and flow tracing, then stopped safely with `round_timeout` during a long local-model Docker turn. The generated app passed compose config/build and served the frontend page, but backend runtime endpoints failed because the backend used ESM `import` syntax without `"type": "module"`.
+- PASS/PARTIAL: the 4-round safe-write rerun validated the mitigation. The run logs and flow trace were coherent, automatic file-validation feedback surfaced package/compose/JS/frontend URL status, and manual runtime acceptance passed. The run's own final status remained `partial` because round 3 recorded a non-blocking `unknown MCP server 'git'` error from the model.
 - CAPABILITY_MISSING: native `web_search`/browser tooling is not available in this local environment. Shell `curl` is a useful fallback when network is allowed, but it is not a native web-search pass.
 
 ## YOLO 10-Round Fullstack Refiner Evaluation
@@ -206,6 +207,54 @@ Conclusion:
 - The flow trace artifact clearly shows the user prompt, each agent input, refiner request summary, raw refiner response, next prompt, and chaining proof through the completed handoffs.
 - The generated app quality remained partial. The backend failure is a generated-project bug, not a qwen-codex infrastructure bug.
 - The live run reconfirms the remaining limitation: local Qwen Docker rounds can still become long single-agent turns and hit the safe timeout before completing all requested rounds.
+- Follow-up mitigation: Qwen YOLO guidance now prefers Python `Path.write_text` or unwrapped quoted heredocs for multi-line JSON/JS/TS/HTML/CSS, requires JSON/JS/YAML validation before claiming completion, and passes lightweight file-validation feedback to the refiner.
+
+## YOLO 4-Round Safe-Write Validation
+
+Run date: 2026-05-03 UTC.
+
+Run paths:
+
+```text
+Workspace: /tmp/qwen-yolo-safe-write
+Run logs: /tmp/qwen-yolo-safe-write/.qwen-codex/yolo-runs/20260503T021013Z-1856508
+```
+
+Command shape:
+
+```text
+qwen-codex --yolo-refiner --iterations 4 --yolo-round-timeout-secs 900 --dangerously-bypass-approvals-and-sandbox "<minimal Express/static frontend/Docker Compose safe-write prompt>"
+```
+
+Run outcome:
+
+- Completed iterations: `4`.
+- Stop reason: `max_iterations`.
+- Run final status: `partial`, because round 3 recorded `resources/read failed: unknown MCP server 'git'`.
+- Round chaining: `PASS`; `flow_trace.json.roundChaining.allRoundInputsMatchPreviousNextPrompt=true`.
+- JSON logs: `PASS`; every `*.json` in the run directory parsed with `python3 -m json.tool`.
+- File-validation feedback: present in each round. It reported valid `package.json`, valid `docker-compose.yml`, passing `backend/server.js` syntax, and no frontend `http://backend:` references once those files existed.
+
+Manual acceptance after the run:
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Package JSON validation | PASS | `python3 -m json.tool ./package.json` exited `0`. |
+| Backend JS syntax | PASS | `node --check backend/server.js` exited `0`. |
+| Docker compose config | PASS | `docker compose config` exited `0`. |
+| Docker compose build | PASS | `docker compose build` completed for the backend image. |
+| Docker compose up | PASS | `docker compose up -d` started backend and frontend containers. |
+| Backend `/health` | PASS | `curl -fsS http://localhost:2226/health` returned `{"status":"ok"}`. |
+| Backend `/api/items` | PASS | `curl -fsS http://localhost:2226/api/items` returned a JSON array with item names. |
+| Frontend `/` | PASS | `curl -fsS http://localhost:2225/ | grep -i item` matched the page title, item list, and fetch code. |
+| Frontend URL check | PASS | `rg 'http://backend:' frontend` found no matches. |
+| Cleanup | PASS | `docker compose down --remove-orphans` removed the test containers and network. |
+
+Conclusion:
+
+- The safe-write guidance improved the generated project enough for manual full-stack acceptance to pass in four rounds.
+- The refiner used file-validation feedback to request narrower repair/validation rounds instead of broad rewrites.
+- Remaining local-model behavior: the agent still performed excessive Dockerfile rewrites in round 3 and attempted an unavailable `git` MCP read. This did not block the final generated app, but it kept the YOLO run status from being a clean in-run `success`.
 
 Normal-mode capability suite workspace:
 

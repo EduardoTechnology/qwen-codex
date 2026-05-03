@@ -9,6 +9,7 @@ use serde::Serialize;
 use crate::config::ResolvedQwenConfig;
 use crate::redaction::redact_text;
 use crate::yolo::agent::tail;
+use crate::yolo::guidance::QWEN_SAFE_FILE_WRITE_GUIDANCE;
 use crate::yolo::types::RefinerFailureDiagnostic;
 use crate::yolo::types::RefinerRequest;
 use crate::yolo::types::RefinerResponse;
@@ -20,7 +21,7 @@ const REFINER_TEMPERATURE: f32 = 0.2;
 const REFINER_DIAGNOSTIC_BODY_LIMIT: usize = 4_000;
 const REFINER_DIAGNOSTIC_REQUEST_LIMIT: usize = 1_000;
 
-const DEFAULT_REFINER_SYSTEM_PROMPT: &str = r#"You are a senior product and engineering refinement strategist supervising an autonomous coding agent.
+const BASE_REFINER_SYSTEM_PROMPT: &str = r#"You are a senior product and engineering refinement strategist supervising an autonomous coding agent.
 
 You receive the previous round's user goal, agent actions, files changed, tests, errors, and current repository state.
 
@@ -55,6 +56,7 @@ Rules:
 - If the previous round used more than 80% of its timeout, make the next prompt smaller than the previous round.
 - If an acceptance criterion was not verified, treat it as incomplete.
 - If a verification command was not run, treat it as incomplete.
+- For local Qwen-generated JSON/JS/TS/HTML/CSS, prefer safe file-writing patterns and exact validation commands over brittle shell quoting.
 - If external verification failed, target that failure in the next prompt.
 - If acceptance-gate checks failed or are missing, target that failure in the next prompt.
 - Do not add unrelated features while runtime acceptance criteria fail.
@@ -88,6 +90,10 @@ Rules:
 - If configured acceptance-gate results are missing or failed, return a focused next-prompt instead of YOLO_STOP.
 - Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless acceptance evidence proves the project is complete."#;
 
+pub(crate) fn default_refiner_system_prompt() -> String {
+    format!("{BASE_REFINER_SYSTEM_PROMPT}\n\n{QWEN_SAFE_FILE_WRITE_GUIDANCE}")
+}
+
 #[derive(Clone)]
 pub(crate) struct RefinerClient {
     client: reqwest::Client,
@@ -113,6 +119,7 @@ impl RefinerClient {
     pub(crate) async fn refine(&self, request: RefinerRequest) -> anyhow::Result<RefinerResponse> {
         let url = format!("{}/chat/completions", self.base_url.trim_end_matches('/'));
         let diagnostic = self.failure_diagnostic(&url, &request.summary, None, None);
+        let system_prompt = default_refiner_system_prompt();
         let response = self
             .client
             .post(&url)
@@ -123,7 +130,7 @@ impl RefinerClient {
                 messages: vec![
                     ChatMessage {
                         role: "system",
-                        content: DEFAULT_REFINER_SYSTEM_PROMPT,
+                        content: &system_prompt,
                     },
                     ChatMessage {
                         role: "user",
@@ -277,6 +284,16 @@ mod tests {
     use crate::config::ResolvedQwenConfig;
 
     use super::*;
+
+    #[test]
+    fn refiner_system_prompt_includes_qwen_safe_write_guidance() {
+        let prompt = default_refiner_system_prompt();
+
+        assert!(prompt.contains("Qwen local safe file writing"));
+        assert!(prompt.contains("Path(\"file\").write_text"));
+        assert!(prompt.contains("python3 -m json.tool file"));
+        assert!(prompt.contains("node --check file"));
+    }
 
     #[tokio::test]
     async fn refiner_client_calls_chat_completions() {

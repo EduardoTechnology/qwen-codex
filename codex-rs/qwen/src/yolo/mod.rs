@@ -1,5 +1,6 @@
 use std::future::Future;
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
@@ -20,6 +21,10 @@ use crate::yolo::agent::git_diff_summary;
 use crate::yolo::agent::git_status;
 use crate::yolo::agent::summarize_agent_result;
 use crate::yolo::agent::tail;
+use crate::yolo::file_validation::acceptance_feedback;
+use crate::yolo::file_validation::collect_file_validation_summary;
+use crate::yolo::file_validation::is_blocking_feedback;
+use crate::yolo::guidance::QWEN_SAFE_FILE_WRITE_GUIDANCE;
 use crate::yolo::logging::YoloLogger;
 use crate::yolo::logging::new_run_id;
 use crate::yolo::logging::now_timestamp;
@@ -44,7 +49,9 @@ use crate::yolo::verification::verification_summary;
 
 mod agent;
 mod analysis;
+mod file_validation;
 mod flow_trace;
+mod guidance;
 mod logging;
 mod prompt_validation;
 mod refiner;
@@ -284,6 +291,7 @@ where
             tool_calls_summary: agent_result.tool_calls.clone(),
             changed_files: agent_result.changed_files.clone(),
             git_diff_summary,
+            file_validation_summary: Vec::new(),
             commands_tests_run: agent_result.commands_tests_run.clone(),
             errors: agent_result.errors.clone(),
             external_verification: Vec::new(),
@@ -403,6 +411,7 @@ where
                 failed_verification_summary(&iteration_log.external_verification)
             ));
         }
+        refresh_file_validation_summary(&cwd, &mut iteration_log).await;
 
         if config
             .iteration_limit
@@ -643,6 +652,20 @@ async fn write_run_and_analysis(logger: &YoloLogger, run_log: &YoloRunLog) -> an
     logger.write_flow_trace(run_log).await
 }
 
+async fn refresh_file_validation_summary(cwd: &Path, iteration_log: &mut YoloIterationLog) {
+    iteration_log.file_validation_summary =
+        collect_file_validation_summary(cwd, iteration_log).await;
+    for feedback in &iteration_log.file_validation_summary {
+        if is_blocking_feedback(feedback) {
+            iteration_log
+                .errors
+                .push(format!("file validation: {feedback}"));
+        }
+    }
+    iteration_log.errors.sort();
+    iteration_log.errors.dedup();
+}
+
 fn build_refiner_summary(iteration: &YoloIterationLog, round_timeout_secs: u64) -> String {
     let timeout_utilization_percent =
         timeout_utilization_percent(iteration.agent_round_duration_seconds, round_timeout_secs);
@@ -654,6 +677,9 @@ fn build_refiner_summary(iteration: &YoloIterationLog, round_timeout_secs: u64) 
 
 Current agent input:
 {input}
+
+Safe file-write guidance:
+{safe_file_write_guidance}
 
 Agent output summary:
 {summary}
@@ -670,11 +696,17 @@ Changed files:
 Commands/tests run:
 {commands}
 
+File validation feedback:
+{file_validation}
+
 External verification:
 {external_verification}
 
 EXTERNAL VERIFICATION FAILED:
 {external_verification_failures}
+
+Acceptance gate feedback:
+{acceptance_feedback}
 
 Errors:
 {errors}
@@ -714,6 +746,9 @@ Next prompt contract:
 - Choose one highest-impact next step that fits this budget.
 - Prefer making the project runnable and fixing known build/runtime blockers before adding scope.
 - Do not ask the agent to finish everything, implement all remaining features, or continue indefinitely.
+- For local Qwen file repairs, include the safe-write and validation constraints from the context.
+- If file validation reports invalid JSON/JS/YAML, JS module mismatch, or `http://backend:` in frontend code, ask for the smallest repair to the named file and the exact validation command; do not request a broad rewrite.
+- If files changed but validation is missing, prioritize running the missing validation before more feature work.
 - If any external verification failed, target that failure before adding unrelated scope.
 - If roundDurationNearTimeout is true, make the next prompt smaller than the prior round and avoid combining large implementation work with heavy verification.
 - For Docker projects, prefer docker compose config before build, run docker compose build only when necessary, use docker compose up -d instead of foreground up, wrap long commands with timeout where appropriate, and run docker compose down after runtime checks.
@@ -727,6 +762,7 @@ Next prompt contract:
 Your role is to inspect the latest round, identify the most impactful remaining improvement, and produce a focused prompt for the next round unless the acceptance evidence proves the project is complete."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
+        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
         summary = tail(
             &iteration.agent_output_summary,
             REFINER_AGENT_SUMMARY_MAX_CHARS
@@ -744,9 +780,15 @@ Your role is to inspect the latest round, identify the most impactful remaining 
             REFINER_LIST_ITEM_MAX_CHARS,
             1_200
         ),
+        file_validation = bullet_lines_limited(
+            &iteration.file_validation_summary,
+            REFINER_LIST_ITEM_MAX_CHARS,
+            1_200
+        ),
         external_verification = verification_summary(&iteration.external_verification),
         external_verification_failures =
             failed_verification_summary(&iteration.external_verification),
+        acceptance_feedback = acceptance_feedback(iteration),
         errors = bullet_lines_limited(
             &iteration.errors,
             REFINER_LIST_ITEM_MAX_CHARS,
@@ -919,6 +961,9 @@ Changed files:
 Commands/tests run:
 {commands}
 
+Safe file-write guidance:
+{safe_file_write_guidance}
+
 Task:
 Generate one bounded repair prompt for the coding agent. The prompt must target the failed acceptance checks first and must not broaden scope.
 
@@ -936,6 +981,7 @@ Constraints for the next prompt:
 - Use at most {max_actions} concrete actions.
 - Run at most {max_tests} verification commands.
 - Keep Docker/web checks focused and bounded.
+- For JSON/JS/TS/HTML/CSS/YAML edits, include safe write methods and exact validation commands.
 - Do not emit YOLO_STOP."#,
         original = iteration.original_user_prompt,
         input = iteration.current_agent_input_prompt,
@@ -955,6 +1001,7 @@ Constraints for the next prompt:
             REFINER_LIST_ITEM_MAX_CHARS,
             1_200
         ),
+        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
         max_files = iteration.round_budget.max_files,
         max_actions = iteration.round_budget.max_actions,
         max_tests = iteration.round_budget.max_tests,
@@ -971,6 +1018,8 @@ Fix failed acceptance checks.
 Context:
 The refiner attempted to stop, but acceptance checks failed or were incomplete:
 {acceptance}
+
+{safe_file_write_guidance}
 
 Task:
 Fix the smallest concrete runtime or build blocker shown in the failed acceptance output. Do not add unrelated features.
@@ -996,6 +1045,7 @@ Stop this agent round after the failed acceptance check is fixed or the remainin
         max_actions = iteration.round_budget.max_actions,
         max_tests = iteration.round_budget.max_tests,
         commands = acceptance_commands_for_prompt(iteration),
+        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
     )
 }
 
@@ -1155,6 +1205,8 @@ fn initial_round_prompt(original_prompt: &str, budget: &RoundBudget) -> String {
     format!(
         r#"{original_prompt}
 
+{safe_file_write_guidance}
+
 YOLO round 1 execution constraints:
 - Treat this as the first bounded round of a multi-round autonomous run, not the whole project.
 - Prefer a minimal runnable baseline before optional features.
@@ -1166,6 +1218,7 @@ YOLO round 1 execution constraints:
         max_files = budget.max_files,
         max_actions = budget.max_actions,
         max_tests = budget.max_tests,
+        safe_file_write_guidance = QWEN_SAFE_FILE_WRITE_GUIDANCE,
     )
 }
 
@@ -1275,6 +1328,10 @@ Stop after the scoped task is complete and verification is summarized."#
 
         assert!(prompt.contains("Build an app"));
         assert!(prompt.contains("first bounded round"));
+        assert!(prompt.contains("Qwen local safe file writing"));
+        assert!(prompt.contains("Path(\"file\").write_text"));
+        assert!(prompt.contains("python3 -m json.tool file"));
+        assert!(prompt.contains("node --check file"));
         assert!(prompt.contains("Modify at most 8 files"));
         assert!(prompt.contains("Stop after completing this bounded round"));
     }
@@ -1839,6 +1896,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: vec!["README.md".to_string()],
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: vec!["touch README.md".to_string()],
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -1909,6 +1967,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -1975,6 +2034,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: vec!["ls".to_string()],
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -2040,6 +2100,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -2088,6 +2149,72 @@ Stop after the scoped task is complete and verification is summarized."#
 
         assert!(iteration.unproductive_round);
         assert!(summary.contains("WARNING: previous round was unproductive"));
+    }
+
+    #[test]
+    fn refiner_summary_includes_file_validation_failure_and_small_repair_guidance() {
+        let iteration = YoloIterationLog {
+            run_id: "run".to_string(),
+            session_id: Some("session".to_string()),
+            iteration: 1,
+            timestamp: now_timestamp(),
+            original_user_prompt: "prompt".to_string(),
+            current_agent_input_prompt: "Fix backend syntax".to_string(),
+            agent_output_summary: "summary".to_string(),
+            actions_taken: Vec::new(),
+            tool_calls_summary: Vec::new(),
+            changed_files: vec!["backend/server.js".to_string()],
+            git_diff_summary: "M backend/server.js".to_string(),
+            file_validation_summary: vec![
+                "backend/server.js: JS syntax check failed exitCode=Some(1): SyntaxError"
+                    .to_string(),
+            ],
+            commands_tests_run: Vec::new(),
+            errors: Vec::new(),
+            external_verification: Vec::new(),
+            acceptance_gate_enabled: true,
+            acceptance_commands: vec!["curl -sf http://localhost:2226/health".to_string()],
+            acceptance_results: Vec::new(),
+            stop_signal_received: false,
+            stop_signal_accepted: false,
+            stop_signal_rejected: false,
+            stop_signal_rejection_reason: None,
+            repair_prompt_after_failed_acceptance: None,
+            actions_captured_count: 0,
+            tool_calls_captured_count: 0,
+            commands_captured_count: 0,
+            files_changed_count: 1,
+            no_action_round: false,
+            no_action_round_reason: None,
+            unproductive_round: false,
+            unproductive_round_reason: None,
+            current_git_status: String::new(),
+            interrupt_received: false,
+            timeout_occurred: false,
+            agent_process_exit_code: Some(0),
+            agent_process_signal: None,
+            agent_round_duration_seconds: 1,
+            agent_finished_normally: true,
+            refiner_skipped_reason: None,
+            refiner_input_summary: None,
+            refiner_raw_response: None,
+            refiner_error: None,
+            next_prompt_injected_into_agent: None,
+            next_prompt_validation_passed: None,
+            next_prompt_validation_issues: Vec::new(),
+            next_prompt_repaired: false,
+            round_budget: RoundBudget::default(),
+            stop_reason: None,
+        };
+
+        let summary = build_refiner_summary(&iteration, 600);
+
+        assert!(summary.contains("File validation feedback:"));
+        assert!(summary.contains("Qwen local safe file writing"));
+        assert!(summary.contains("backend/server.js: JS syntax check failed"));
+        assert!(summary.contains("acceptance commands not run yet"));
+        assert!(summary.contains("ask for the smallest repair to the named file"));
+        assert!(summary.contains("do not request a broad rewrite"));
     }
 
     #[tokio::test]
@@ -2182,6 +2309,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -2241,6 +2369,7 @@ Stop after the scoped task is complete and verification is summarized."#
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: "diff".repeat(10_000),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: vec!["error".repeat(100_000)],
             external_verification: Vec::new(),

@@ -182,6 +182,8 @@ pub(crate) struct YoloIterationLog {
     #[serde(rename = "filesChanged")]
     pub changed_files: Vec<String>,
     pub git_diff_summary: String,
+    #[serde(default)]
+    pub file_validation_summary: Vec<String>,
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
     pub external_verification: Vec<ExternalVerificationResult>,

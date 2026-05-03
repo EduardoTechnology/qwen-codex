@@ -226,6 +226,11 @@ fn iteration_markdown(iteration: &YoloIterationLog) -> String {
         "Commands And Tests",
         &iteration.commands_tests_run,
     );
+    list_section(
+        &mut out,
+        "File Validation Summary",
+        &iteration.file_validation_summary,
+    );
     external_verification_section(&mut out, &iteration.external_verification);
     acceptance_results_section(&mut out, &iteration.acceptance_results);
     list_section(&mut out, "Errors", &iteration.errors);
@@ -336,6 +341,7 @@ mod tests {
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
@@ -438,6 +444,7 @@ mod tests {
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),

@@ -58,6 +58,7 @@ pub(crate) struct YoloRoundAnalysis {
     pub agent_input_preview: String,
     pub agent_output_summary_preview: String,
     pub files_changed: Vec<String>,
+    pub file_validation_summary: Vec<String>,
     pub commands_tests_run: Vec<String>,
     pub errors: Vec<String>,
     pub external_verification: Vec<ExternalVerificationResult>,
@@ -122,6 +123,7 @@ pub(crate) struct DiagnosticsAnalysis {
     pub agent_errors: Vec<String>,
     pub provider_errors: Vec<String>,
     pub refiner_errors: Vec<String>,
+    pub file_validation: Vec<String>,
     pub json_log_valid: bool,
 }
 
@@ -153,6 +155,7 @@ pub(crate) fn build_run_analysis(run: &YoloRunLog) -> YoloRunAnalysis {
                 agent_input_preview: preview(&iteration.current_agent_input_prompt),
                 agent_output_summary_preview: preview(&iteration.agent_output_summary),
                 files_changed: iteration.changed_files.clone(),
+                file_validation_summary: iteration.file_validation_summary.clone(),
                 commands_tests_run: iteration.commands_tests_run.clone(),
                 errors: iteration.errors.clone(),
                 external_verification: iteration.external_verification.clone(),
@@ -331,6 +334,11 @@ pub(crate) fn analysis_markdown(analysis: &YoloRunAnalysis) -> String {
         "Refiner errors",
         &analysis.diagnostics.refiner_errors,
     );
+    list(
+        &mut out,
+        "File validation",
+        &analysis.diagnostics.file_validation,
+    );
     out.push_str("\n## Action Diagnostics\n\n");
     out.push_str(
         "| Round | Actions | Tool calls | Commands | Files | Timeout % | Near timeout | No-action round | Unproductive round | Stop signal |\n",
@@ -422,6 +430,7 @@ fn analyze_diagnostics(run: &YoloRunLog) -> DiagnosticsAnalysis {
         agent_errors: Vec::new(),
         provider_errors: Vec::new(),
         refiner_errors: Vec::new(),
+        file_validation: Vec::new(),
         json_log_valid: true,
     };
     for iteration in &run.iterations {
@@ -464,6 +473,13 @@ fn analyze_diagnostics(run: &YoloRunLog) -> DiagnosticsAnalysis {
                     preview(error)
                 ));
             }
+        }
+        for feedback in &iteration.file_validation_summary {
+            diagnostics.file_validation.push(format!(
+                "iteration {}: {}",
+                iteration.iteration,
+                preview(feedback)
+            ));
         }
     }
     diagnostics
@@ -627,6 +643,7 @@ mod tests {
             tool_calls_summary: Vec::new(),
             changed_files: Vec::new(),
             git_diff_summary: String::new(),
+            file_validation_summary: Vec::new(),
             commands_tests_run: Vec::new(),
             errors: Vec::new(),
             external_verification: Vec::new(),
