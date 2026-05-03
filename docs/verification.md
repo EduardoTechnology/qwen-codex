@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-02T23:58:10Z
+Last updated: 2026-05-03T04:40:30Z
 
 ## Verified Local Qwen/vLLM Server
 
@@ -209,6 +209,19 @@ Conclusion:
 - The live run reconfirms the remaining limitation: local Qwen Docker rounds can still become long single-agent turns and hit the safe timeout before completing all requested rounds.
 - Follow-up mitigation: Qwen YOLO guidance now prefers Python `Path.write_text` or unwrapped quoted heredocs for multi-line JSON/JS/TS/HTML/CSS, requires JSON/JS/YAML validation before claiming completion, and passes lightweight file-validation feedback to the refiner.
 
+## YOLO MCP Warning Classification
+
+Unavailable MCP server/tool/resource attempts are now treated as infrastructure warnings rather than project blockers when project acceptance evidence passes. The analysis and flow-trace artifacts include:
+
+```text
+infrastructureWarnings: []
+unavailableToolAttempts: []
+```
+
+For attempts such as `unknown MCP server 'git'` or `unknown MCP server 'filesystem'`, the run records `blocking=false`. If acceptance/project checks fail, the run remains `partial` or `failed`; the warning classification only prevents an otherwise passing project from being downgraded solely because the local model requested a non-existent MCP server.
+
+The refiner context now tells local Qwen to use shell fallbacks such as `git status`, `ls`, `find`, `cat`, `python3`, `node`, and `docker compose` instead of repeatedly requesting unavailable MCP servers.
+
 ## YOLO 4-Round Safe-Write Validation
 
 Run date: 2026-05-03 UTC.
@@ -255,6 +268,55 @@ Conclusion:
 - The safe-write guidance improved the generated project enough for manual full-stack acceptance to pass in four rounds.
 - The refiner used file-validation feedback to request narrower repair/validation rounds instead of broad rewrites.
 - Remaining local-model behavior: the agent still performed excessive Dockerfile rewrites in round 3 and attempted an unavailable `git` MCP read. This did not block the final generated app, but it kept the YOLO run status from being a clean in-run `success`.
+
+## YOLO Final Fullstack Validation
+
+Run date: 2026-05-03 UTC.
+
+Run paths:
+
+```text
+Workspace: /tmp/qwen-yolo-fullstack-final
+Run logs: /tmp/qwen-yolo-fullstack-final/.qwen-codex/yolo-runs/20260503T025110Z-1945177
+Windows copy: /mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/fullstack-final/20260503T025110Z-1945177
+Flow review: docs/yolo-refiner-flow-review.md
+```
+
+Run outcome:
+
+- Requested iterations: `6`.
+- Logged iterations: `4`.
+- `run.json.completedAt`: `null`.
+- `run.json.stopReason`: `null`.
+- `analysis.json.finalStatus`: `partial`.
+- `flow_trace.json.roundChaining.allRoundInputsMatchPreviousNextPrompt`: `true`.
+- Infrastructure warnings: none in this run.
+- Unavailable MCP attempts: none in this run.
+
+Manual acceptance after the incomplete run:
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| JSON logs | PASS | `run.json`, `analysis.json`, and `flow_trace.json` parsed with `python3 -m json.tool`. |
+| Package JSON validation | PASS | `python3 -m json.tool package.json` exited `0`. |
+| Backend JS syntax | PASS | `node --check server.js` exited `0`. |
+| Frontend server JS syntax | PASS | `node --check static_server.js` exited `0`. |
+| Docker compose config | PASS | `docker compose config` exited `0`. |
+| Docker compose build | PASS | Both backend and frontend images built. |
+| Docker compose up | PASS | `docker compose up -d` started both services. |
+| Backend `/health` | PASS | `curl -fsS http://localhost:2226/health` returned `{"status":"ok"}`. |
+| Backend `/api/items` | PASS | `curl -fsS http://localhost:2226/api/items` returned a JSON array. |
+| Frontend `/` | PASS | `curl -fsS http://localhost:2225 | grep -i item` matched item content and fetch code. |
+| Frontend URL check | PASS | No `http://backend:` reference was found under frontend files. |
+| Secret redaction | PASS | No `local-dev-key` or `Authorization` header was found in the copied run logs. |
+| README | FAIL | `README.md` was required by the prompt but not created before the run ended. |
+
+Conclusion:
+
+- Generated-project runtime acceptance passed manually.
+- Flow chaining was coherent for the four logged handoffs.
+- Refiner behavior was useful through round 3, but round 4 became noisy, overran the soft action budget, and produced a truncated next prompt.
+- The run is classified `PARTIAL` because YOLO did not record a clean terminal lifecycle (`completedAt=null`, `stopReason=null`) and did not log in-run acceptance results.
 
 Normal-mode capability suite workspace:
 

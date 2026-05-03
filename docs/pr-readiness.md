@@ -1,6 +1,6 @@
 # PR Readiness
 
-Last updated: 2026-05-02T23:58:10Z
+Last updated: 2026-05-03T04:40:30Z
 
 ## Branch
 
@@ -21,6 +21,8 @@ Major features:
 - YOLO round chaining, structured JSON/Markdown logs, `analysis.json`, action diagnostics, timeout-utilization diagnostics, and secret redaction.
 - YOLO `flow_trace.json` and `flow_trace.md` for full user-prompt to agent/refiner/nextPrompt review.
 - Acceptance gate for real verification commands before accepting stop or final fixed-iteration success.
+- Qwen YOLO safe-write, file-validation, and unavailable-MCP fallback guidance.
+- Analysis/flow-trace fields for non-blocking unavailable MCP attempts when acceptance passes.
 
 ## Verified Model Setup
 
@@ -57,6 +59,9 @@ Key run paths:
 - Windows copy of compact-pressure logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/compact-pressure/20260502T213530Z-1376298`
 - Full-stack 10-round refiner evaluation: `/tmp/qwen-yolo-fullstack-10/.qwen-codex/yolo-runs/20260502T232422Z-1560909`
 - Windows copy of full-stack refiner logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/fullstack-10/20260502T232422Z-1560909`
+- Final full-stack validation: `/tmp/qwen-yolo-fullstack-final/.qwen-codex/yolo-runs/20260503T025110Z-1945177`
+- Windows copy of final full-stack logs: `/mnt/c/Users/eduar/Documents/qwen-codex-yolo-logs/fullstack-final/20260503T025110Z-1945177`
+- Round-by-round flow review: [docs/yolo-refiner-flow-review.md](yolo-refiner-flow-review.md)
 - Ecommerce acceptance-gated verification: documented in [docs/verification.md](verification.md)
 
 ## Commands Passed
@@ -118,10 +123,16 @@ This branch currently has no common merge-base with the fetched `upstream/main` 
 - Shell `curl` network access is a useful fallback but not native web-search parity.
 - Larger local-Qwen scaffold tasks can still produce small consistency bugs, such as package scripts pointing to the wrong generated entrypoint.
 - The latest full-stack YOLO/refiner evaluation proved flow tracing and round chaining through six rounds, but stopped with `round_timeout` during a long Docker/runtime agent turn. The generated backend then failed runtime checks because it used ESM `import` syntax without `"type": "module"`.
+- The final full-stack validation generated a manually passing Docker app, but the YOLO run did not finish cleanly: only four of six requested iterations were logged, `completedAt=null`, and `stopReason=null`.
+- Unavailable MCP attempts such as `git`/`filesystem` are now non-blocking warnings when project acceptance passes, but local Qwen can still waste turns requesting unavailable MCP resources.
 - The final YOLO mini capability run timed out in round 3 and generated failing Python tests.
 - Auto-compact config propagation is confirmed, but no actual compaction event was triggered. The best-effort 15-round pressure attempt created 12 text files in one agent turn and then stopped safely with `round_timeout` before resumed-turn compaction pressure was reached.
 - Live rejected-`YOLO_STOP` was not triggered by the model, though focused tests cover acceptance-gate rejection and repair prompting.
-- Docker projects can still produce long single-agent turns; refiner guidance narrows future prompts but does not guarantee short local-model turns.
+- Docker projects can still produce long single-agent turns; refiner guidance narrows future prompts but does not guarantee short local-model turns or a clean terminal run record.
+
+## Current Recommendation
+
+Open a PR for review only if the remaining limitations are explicit in the PR body. I do not recommend merging to `main` yet because the latest final validation exposed an incomplete YOLO lifecycle record even though the generated app passed manual acceptance.
 
 ## Remaining Roadmap
 
