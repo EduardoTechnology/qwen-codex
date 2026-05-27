@@ -13,29 +13,33 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
-Install the CLI once, then run `qwen-codex` directly from any repository:
+Install the CLI once with your Qwen `/v1` URL, then run `qwen-codex` directly from any repository.
+
+WSL2/Linux/macOS:
 
 ```sh
-./scripts/install-qwen-codex.sh
+./scripts/install-qwen-codex.sh http://127.0.0.1:8002/v1
 qwen-codex --health
 qwen-codex
 ```
 
-On Windows PowerShell:
+Windows PowerShell:
 
 ```powershell
-.\scripts\install-qwen-codex.ps1
+.\scripts\install-qwen-codex.ps1 -BaseUrl http://127.0.0.1:8002/v1
 qwen-codex --health
 qwen-codex
 ```
 
-The install scripts build all local CLI binaries and put `qwen-codex` on the current environment's PATH. WSL/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+The install scripts build all local CLI binaries, detect the model from `/v1/models` when available, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
 
 For a Cargo release-style install instead:
 
 ```sh
 cargo install --path codex-rs/cli --bins --locked --force
 ```
+
+With the Cargo install path, configure the endpoint through `QWEN_CODEX_BASE_URL` before running `qwen-codex`.
 
 Bring any OpenAI-compatible Qwen server, copy its `/v1` URL, and run one command. The helper builds `qwen-codex`, detects the first model from `/v1/models` when possible, checks health, and sends the prompt:
 
