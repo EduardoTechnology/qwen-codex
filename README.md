@@ -13,6 +13,24 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
+Install the CLI once, then run `qwen-codex` directly from any repository:
+
+```sh
+cargo install --path codex-rs/cli --bins --locked --force
+qwen-codex --health
+qwen-codex
+```
+
+On Windows PowerShell:
+
+```powershell
+cargo install --path .\codex-rs\cli --bins --locked --force
+qwen-codex --health
+qwen-codex
+```
+
+Install all binaries together. `qwen-codex` delegates to the upstream-compatible `codex` binary, so installing only `qwen-codex` can leave it without its sibling executable.
+
 Bring any OpenAI-compatible Qwen server, copy its `/v1` URL, and run one command. The helper builds `qwen-codex`, detects the first model from `/v1/models` when possible, checks health, and sends the prompt:
 
 ```sh
