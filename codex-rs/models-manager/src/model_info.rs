@@ -18,6 +18,10 @@ const DEFAULT_PERSONALITY_HEADER: &str = "You are Codex, a coding agent based on
 const LOCAL_FRIENDLY_TEMPLATE: &str =
     "You optimize for team morale and being a supportive teammate as much as code quality.";
 const LOCAL_PRAGMATIC_TEMPLATE: &str = "You are a deeply pragmatic, effective software engineer.";
+const LOCAL_QWEN_TOOL_GUIDANCE: &str = r#"Qwen local tool guidance:
+- Use only tools and MCP servers that are listed in the current session.
+- Do not invent MCP servers such as `files`, `filesystem`, or `git`; use shell commands like `ls`, `find`, `cat`, `git`, `python3`, `node`, and `docker compose` when safe.
+- For JSON/JS/TS/HTML/CSS files, prefer Python `Path.write_text` for multi-line writes and validate JSON/JS/YAML before claiming completion."#;
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
@@ -105,6 +109,16 @@ fn local_personality_messages_for_slug(slug: &str) -> Option<ModelMessages> {
         "gpt-5.2-codex" | "exp-codex-personality" => Some(ModelMessages {
             instructions_template: Some(format!(
                 "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}"
+            )),
+            instructions_variables: Some(ModelInstructionsVariables {
+                personality_default: Some(String::new()),
+                personality_friendly: Some(LOCAL_FRIENDLY_TEMPLATE.to_string()),
+                personality_pragmatic: Some(LOCAL_PRAGMATIC_TEMPLATE.to_string()),
+            }),
+        }),
+        "qwen35-local" => Some(ModelMessages {
+            instructions_template: Some(format!(
+                "{DEFAULT_PERSONALITY_HEADER}\n\n{PERSONALITY_PLACEHOLDER}\n\n{BASE_INSTRUCTIONS}\n\n{LOCAL_QWEN_TOOL_GUIDANCE}"
             )),
             instructions_variables: Some(ModelInstructionsVariables {
                 personality_default: Some(String::new()),

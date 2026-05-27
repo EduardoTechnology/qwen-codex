@@ -18,6 +18,17 @@ fn reasoning_summaries_override_true_enables_support() {
 }
 
 #[test]
+fn qwen_local_model_instructions_include_tool_guidance() {
+    let model = model_info_from_slug("qwen35-local");
+    let instructions =
+        model.get_model_instructions(Some(codex_protocol::config_types::Personality::Pragmatic));
+
+    assert!(instructions.contains("Qwen local tool guidance"));
+    assert!(instructions.contains("Do not invent MCP servers"));
+    assert!(instructions.contains("Path.write_text"));
+}
+
+#[test]
 fn reasoning_summaries_override_false_does_not_disable_support() {
     let mut model = model_info_from_slug("unknown-model");
     model.supports_reasoning_summaries = true;

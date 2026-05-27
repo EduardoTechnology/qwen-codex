@@ -13,14 +13,44 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
+Bring any OpenAI-compatible Qwen server, copy its `/v1` URL, and run one command. The helper builds `qwen-codex`, detects the first model from `/v1/models` when possible, checks health, and sends the prompt:
+
 ```sh
-cp .env.example .env
-docker compose -f modelo/docker-compose.qwen35-9b-awq.yml up -d
-curl http://127.0.0.1:8002/v1/models
+./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "What is 2+2? Answer in one word."
+```
+
+On Windows PowerShell:
+
+```powershell
+.\scripts\qwen-codex-local.ps1 -BaseUrl http://127.0.0.1:8002/v1 -Prompt "What is 2+2? Answer in one word."
+```
+
+If the server does not expose `/v1/models`, set the model name explicitly:
+
+```sh
+QWEN_CODEX_MODEL=qwen35-local ./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "Summarize this repo."
+```
+
+Minimal environment form:
+
+```sh
+export QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1
+export QWEN_CODEX_API_KEY=local-dev-key
+export QWEN_CODEX_MODEL=qwen35-local
+export QWEN_CODEX_CONTEXT_WINDOW=32768
 cd codex-rs
 cargo build -p codex-cli
 ./target/debug/qwen-codex --health
-./target/debug/qwen-codex "What is 2+2? Answer in one word."
+./target/debug/qwen-codex "Create hello.txt with one sentence, then read it back and tell me the exact text."
+```
+
+Optional bundled Qwen/vLLM server:
+
+```sh
+cp .env.example .env
+docker compose -f deploy/qwen-9b/docker-compose.yml up -d
+curl http://127.0.0.1:8002/v1/models
+./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "Create hello.txt with one sentence, then read it back."
 ```
 
 The compatibility alias is also built:
@@ -48,7 +78,7 @@ The verified local baseline is:
 Start the model with:
 
 ```sh
-docker compose -f modelo/docker-compose.qwen35-9b-awq.yml up -d
+docker compose -f deploy/qwen-9b/docker-compose.yml up -d
 ```
 
 The compose template keeps tool calling configurable through `VLLM_TOOL_CALL_PARSER`. The current default is `qwen3_coder`; `qwen3_xml` is another Qwen parser to test when changing model families or vLLM versions.
@@ -65,7 +95,7 @@ QWEN_CODEX_API_KEY=local-dev-key
 QWEN_CODEX_MODEL=qwen35-local
 QWEN_CODEX_CONTEXT_WINDOW=32768
 QWEN_CODEX_REQUEST_TIMEOUT_MS=120000
-QWEN_CODEX_LOG_LEVEL=info
+QWEN_CODEX_LOG_LEVEL=error
 ```
 
 Local vLLM accepts a placeholder API key unless you configure API-key enforcement on the server.
@@ -211,7 +241,7 @@ pnpm run format
 
 `pnpm run format` emits a Node.js engine warning on Node v20; Node v22+ is required for full compatibility but formatting still passes.
 
-The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside a Docker service network, use the service hostname and container port, for example `http://qwen35-vllm:8000/v1`. Do not use host port `8000` if another local service already owns it.
+The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside that Docker Compose network, use the service hostname and container port, for example `http://qwen35:8000/v1`. Do not use host port `8000` if another local service already owns it.
 
 When syncing from upstream, prefer merging `upstream/main` into this fork's `main` so Qwen-specific history remains visible:
 
@@ -225,7 +255,8 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 
 ## Documentation
 
-- [Modelo compose files](modelo/README.md)
+- [Bundled Qwen/vLLM compose](deploy/qwen-9b/docker-compose.yml)
+- [Modelo compose notes](modelo/README.md)
 - [YOLO mode](docs/yolo-mode.md)
 - [Verification](docs/verification.md)
 - [Research notes](docs/research-notes.md)
@@ -233,4 +264,4 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 - [Roadmap](docs/roadmap.md)
 - [Contributing](CONTRIBUTING.md)
 
-Community model compose files belong under `modelo/` as `docker-compose.<model>.yml` with model, parser, GPU, and context-window notes.
+Community model compose files belong under `modelo/` as `docker-compose.<model>.yml` with model, parser, GPU, and context-window notes. The plug-and-play local demo compose currently lives at `deploy/qwen-9b/docker-compose.yml`.
