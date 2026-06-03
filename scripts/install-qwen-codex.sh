@@ -76,6 +76,7 @@ write_qwen_wrapper() {
   local name="$1"
   local real="$2"
   local path="$install_dir/$name"
+  rm -f "$path"
   cat >"$path" <<EOF
 #!/usr/bin/env bash
 export QWEN_CODEX_BASE_URL="\${QWEN_CODEX_BASE_URL:-$base_url}"
@@ -85,6 +86,14 @@ export QWEN_CODEX_CONTEXT_WINDOW="\${QWEN_CODEX_CONTEXT_WINDOW:-$context_window}
 exec "$install_dir/$real" "\$@"
 EOF
   chmod +x "$path"
+}
+
+install_binary() {
+  local src="$1"
+  local dest="$2"
+  rm -f "$dest"
+  cp "$src" "$dest"
+  chmod +x "$dest"
 }
 
 detect_model_metadata
@@ -105,10 +114,9 @@ for bin in codex qwen-codex qwencodex; do
     exit 1
   fi
 done
-cp -f "$target_dir/codex" "$install_dir/codex"
-cp -f "$target_dir/qwen-codex" "$install_dir/qwen-codex-real"
-cp -f "$target_dir/qwencodex" "$install_dir/qwencodex-real"
-chmod +x "$install_dir/codex" "$install_dir/qwen-codex-real" "$install_dir/qwencodex-real"
+install_binary "$target_dir/codex" "$install_dir/codex"
+install_binary "$target_dir/qwen-codex" "$install_dir/qwen-codex-real"
+install_binary "$target_dir/qwencodex" "$install_dir/qwencodex-real"
 write_qwen_wrapper "qwen-codex" "qwen-codex-real"
 write_qwen_wrapper "qwencodex" "qwencodex-real"
 

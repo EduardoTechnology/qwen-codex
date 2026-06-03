@@ -6,6 +6,9 @@ use codex_protocol::models::ResponseItem;
 
 const QWEN_PROVIDER_NAME: &str = "Qwen local OpenAI-compatible";
 const QWEN_REASONING_ONLY_WARNING: &str = "Qwen Responses API returned reasoning-only output without a final assistant message. Verify vLLM is started with --default-chat-template-kwargs '{\"enable_thinking\": false}' and use a vLLM build/model whose Responses API honors Qwen chat template kwargs.";
+const QWEN_TOOL_OUTPUT_ONLY_WARNING: &str =
+    "Qwen Responses API returned tool output but no final assistant message.";
+const QWEN_TOOL_OUTPUT_FALLBACK_MAX_CHARS: usize = 4_000;
 
 pub(crate) fn apply_qwen_responses_compat(
     provider: &Provider,
@@ -124,24 +127,29 @@ pub(crate) fn synthesize_qwen_reasoning_only_message(
     reasoning_text: &str,
     needs_follow_up: bool,
     saw_tool_output: bool,
+    last_tool_output_text: Option<&str>,
 ) -> Option<ResponseItem> {
     if needs_follow_up {
         return None;
     }
     let text = if reasoning_text.trim().is_empty() {
-        if saw_tool_output {
-            "Completed.".to_string()
+        if let Some(output) = last_tool_output_text.and_then(format_qwen_tool_output_fallback) {
+            output
+        } else if saw_tool_output {
+            QWEN_TOOL_OUTPUT_ONLY_WARNING.to_string()
         } else {
             return None;
         }
     } else {
-        extract_qwen_final_answer_from_reasoning(reasoning_text).unwrap_or_else(|| {
-            if saw_tool_output {
-                "Completed.".to_string()
-            } else {
-                QWEN_REASONING_ONLY_WARNING.to_string()
-            }
-        })
+        extract_qwen_final_answer_from_reasoning(reasoning_text, saw_tool_output)
+            .or_else(|| last_tool_output_text.and_then(format_qwen_tool_output_fallback))
+            .unwrap_or_else(|| {
+                if saw_tool_output {
+                    QWEN_TOOL_OUTPUT_ONLY_WARNING.to_string()
+                } else {
+                    QWEN_REASONING_ONLY_WARNING.to_string()
+                }
+            })
     };
     Some(ResponseItem::Message {
         id: None,
@@ -151,7 +159,44 @@ pub(crate) fn synthesize_qwen_reasoning_only_message(
     })
 }
 
-fn extract_qwen_final_answer_from_reasoning(reasoning_text: &str) -> Option<String> {
+pub(crate) fn qwen_last_tool_output_text(input: &[ResponseItem]) -> Option<String> {
+    input
+        .iter()
+        .rev()
+        .filter_map(response_item_tool_output_text)
+        .find(|text| !text.trim().is_empty())
+}
+
+fn response_item_tool_output_text(item: &ResponseItem) -> Option<String> {
+    match item {
+        ResponseItem::FunctionCallOutput { output, .. }
+        | ResponseItem::CustomToolCallOutput { output, .. } => output.body.to_text(),
+        ResponseItem::ToolSearchOutput { execution, .. } => Some(execution.clone()),
+        ResponseItem::Message { .. }
+        | ResponseItem::Reasoning { .. }
+        | ResponseItem::LocalShellCall { .. }
+        | ResponseItem::FunctionCall { .. }
+        | ResponseItem::CustomToolCall { .. }
+        | ResponseItem::ToolSearchCall { .. }
+        | ResponseItem::WebSearchCall { .. }
+        | ResponseItem::ImageGenerationCall { .. }
+        | ResponseItem::Compaction { .. }
+        | ResponseItem::Other => None,
+    }
+}
+
+fn format_qwen_tool_output_fallback(output: &str) -> Option<String> {
+    let trimmed = output.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(trimmed, QWEN_TOOL_OUTPUT_FALLBACK_MAX_CHARS))
+}
+
+fn extract_qwen_final_answer_from_reasoning(
+    reasoning_text: &str,
+    saw_tool_output: bool,
+) -> Option<String> {
     let markers = [
         "Construct Output:",
         "Final Answer:",
@@ -173,6 +218,11 @@ fn extract_qwen_final_answer_from_reasoning(reasoning_text: &str) -> Option<Stri
         .or_else(|| extract_after_last_pattern(reasoning_text, "Answer is"))
         .or_else(|| extract_after_last_pattern(reasoning_text, "="))
         .or_else(|| extract_concise_completion_line(reasoning_text))
+        .or_else(|| {
+            saw_tool_output
+                .then(|| extract_user_facing_tool_answer(reasoning_text))
+                .flatten()
+        })
 }
 
 fn first_clean_answer_line(text: &str) -> Option<String> {
@@ -255,6 +305,54 @@ fn extract_concise_completion_line(reasoning_text: &str) -> Option<String> {
         }
     }
     None
+}
+
+fn extract_user_facing_tool_answer(reasoning_text: &str) -> Option<String> {
+    let trimmed = reasoning_text.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let first_line = trimmed
+        .lines()
+        .find(|line| !line.trim().is_empty())?
+        .trim()
+        .to_ascii_lowercase();
+    let reasoning_prefixes = [
+        "thinking",
+        "thought",
+        "analysis",
+        "we need",
+        "i need",
+        "need to",
+        "let's",
+        "i will",
+        "the user",
+        "user asks",
+    ];
+    if reasoning_prefixes
+        .iter()
+        .any(|prefix| first_line.starts_with(prefix))
+    {
+        return None;
+    }
+    Some(truncate_chars(trimmed, QWEN_TOOL_OUTPUT_FALLBACK_MAX_CHARS))
+}
+
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    let mut end = text.len();
+    let mut count = 0;
+    for (index, _) in text.char_indices() {
+        if count == max_chars {
+            end = index;
+            break;
+        }
+        count += 1;
+    }
+    if count <= max_chars {
+        text.to_string()
+    } else {
+        format!("{}…", &text[..end])
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +539,7 @@ mod tests {
             "Thinking Process:\n\n5. Construct Output:\n    4\n",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ false,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -463,6 +562,7 @@ mod tests {
             "Thinking Process:\n- still thinking",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ false,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -485,6 +585,7 @@ mod tests {
             "### Summary\n\nI created `hello.py` and `README.md`.",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ false,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -508,6 +609,7 @@ mod tests {
                 "Thinking Process:\n- called a tool",
                 /*needs_follow_up*/ true,
                 /*saw_tool_output*/ true,
+                /*last_tool_output_text*/ None,
             ),
             None
         );
@@ -519,6 +621,7 @@ mod tests {
             "Calculate the Answer: 2 + 2 = 4.",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ false,
+            /*last_tool_output_text*/ None,
         )
         .unwrap();
 
@@ -541,6 +644,7 @@ mod tests {
             "The answer is simply 4.",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ false,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -563,6 +667,7 @@ mod tests {
             "Files created. Now verify briefly and summarize.",
             /*needs_follow_up*/ false,
             /*saw_tool_output*/ true,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -580,9 +685,11 @@ mod tests {
     }
 
     #[test]
-    fn reports_completion_after_tool_output_without_final_reasoning_text() {
+    fn extracts_user_facing_answer_from_qwen_reasoning_after_tool_output() {
+        let answer = "Aqui estão as 3 últimas linhas de `README.md`:\n\n- [Contributing](CONTRIBUTING.md)\n\nCommunity model compose files belong under `modelo/`.";
         let item = synthesize_qwen_reasoning_only_message(
-            "", /*needs_follow_up*/ false, /*saw_tool_output*/ true,
+            answer, /*needs_follow_up*/ false, /*saw_tool_output*/ true,
+            /*last_tool_output_text*/ None,
         )
         .expect("message");
 
@@ -592,10 +699,53 @@ mod tests {
                 id: None,
                 role: "assistant".to_string(),
                 content: vec![ContentItem::OutputText {
-                    text: "Completed.".to_string()
+                    text: answer.to_string()
                 }],
                 phase: Some(MessagePhase::FinalAnswer),
             }
+        );
+    }
+
+    #[test]
+    fn uses_last_tool_output_without_final_reasoning_text() {
+        let item = synthesize_qwen_reasoning_only_message(
+            "",
+            /*needs_follow_up*/ false,
+            /*saw_tool_output*/ true,
+            Some("- [Contributing](CONTRIBUTING.md)\n\nLast line."),
+        )
+        .expect("message");
+
+        assert_eq!(
+            item,
+            ResponseItem::Message {
+                id: None,
+                role: "assistant".to_string(),
+                content: vec![ContentItem::OutputText {
+                    text: "- [Contributing](CONTRIBUTING.md)\n\nLast line.".to_string()
+                }],
+                phase: Some(MessagePhase::FinalAnswer),
+            }
+        );
+    }
+
+    #[test]
+    fn finds_last_tool_output_text() {
+        let input = vec![
+            ResponseItem::FunctionCallOutput {
+                call_id: "call-1".to_string(),
+                output: FunctionCallOutputPayload::from_text("first".to_string()),
+            },
+            ResponseItem::CustomToolCallOutput {
+                call_id: "call-2".to_string(),
+                name: None,
+                output: FunctionCallOutputPayload::from_text("second".to_string()),
+            },
+        ];
+
+        assert_eq!(
+            qwen_last_tool_output_text(&input),
+            Some("second".to_string())
         );
     }
 

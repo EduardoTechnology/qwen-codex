@@ -23,8 +23,11 @@ fn qwen_local_model_instructions_include_tool_guidance() {
     let instructions =
         model.get_model_instructions(Some(codex_protocol::config_types::Personality::Pragmatic));
 
+    assert!(!model.used_fallback_model_metadata);
+    assert_eq!(model.context_window, Some(32_768));
     assert!(instructions.contains("Qwen local tool guidance"));
     assert!(instructions.contains("Do not invent MCP servers"));
+    assert!(instructions.contains("simple file read/transcription requests"));
     assert!(instructions.contains("Path.write_text"));
 }
 

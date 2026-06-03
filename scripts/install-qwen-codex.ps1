@@ -53,6 +53,7 @@ function Write-QwenCmdWrapper {
     )
 
     $WrapperPath = Join-Path $InstallDir "$Name.cmd"
+    Remove-Item -Force -ErrorAction SilentlyContinue $WrapperPath
     $Content = @"
 @echo off
 if not defined QWEN_CODEX_BASE_URL set "QWEN_CODEX_BASE_URL=$BaseUrl"
@@ -62,6 +63,16 @@ if not defined QWEN_CODEX_CONTEXT_WINDOW set "QWEN_CODEX_CONTEXT_WINDOW=$Context
 "%~dp0$RealExe" %*
 "@
     Set-Content -Path $WrapperPath -Value $Content -Encoding ASCII
+}
+
+function Install-Binary {
+    param(
+        [string]$Source,
+        [string]$Destination
+    )
+
+    Remove-Item -Force -ErrorAction SilentlyContinue $Destination
+    Copy-Item -Path $Source -Destination $Destination
 }
 
 Initialize-QwenMetadata
@@ -87,9 +98,9 @@ foreach ($Bin in @("codex", "qwen-codex", "qwencodex")) {
         exit 1
     }
 }
-Copy-Item -Force -Path (Join-Path $TargetDir "codex.exe") -Destination (Join-Path $InstallDir "codex.exe")
-Copy-Item -Force -Path (Join-Path $TargetDir "qwen-codex.exe") -Destination (Join-Path $InstallDir "qwen-codex-real.exe")
-Copy-Item -Force -Path (Join-Path $TargetDir "qwencodex.exe") -Destination (Join-Path $InstallDir "qwencodex-real.exe")
+Install-Binary -Source (Join-Path $TargetDir "codex.exe") -Destination (Join-Path $InstallDir "codex.exe")
+Install-Binary -Source (Join-Path $TargetDir "qwen-codex.exe") -Destination (Join-Path $InstallDir "qwen-codex-real.exe")
+Install-Binary -Source (Join-Path $TargetDir "qwencodex.exe") -Destination (Join-Path $InstallDir "qwencodex-real.exe")
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $InstallDir "qwen-codex.exe")
 Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $InstallDir "qwencodex.exe")
 Write-QwenCmdWrapper -Name "qwen-codex" -RealExe "qwen-codex-real.exe"

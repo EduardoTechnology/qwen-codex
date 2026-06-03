@@ -39,6 +39,7 @@ use crate::mentions::collect_tool_mentions_from_messages;
 use crate::parse_turn_item;
 use crate::plugins::build_plugin_injections;
 use crate::qwen_compat::is_qwen_provider_name;
+use crate::qwen_compat::qwen_last_tool_output_text;
 use crate::qwen_compat::qwen_reasoning_text_from_item;
 use crate::qwen_compat::synthesize_qwen_reasoning_only_message;
 use crate::resolve_skill_dependencies_for_turn;
@@ -1856,15 +1857,10 @@ async fn try_run_sampling_request(
     let mut plan_mode_state = plan_mode.then(|| PlanModeStreamState::new(&turn_context.sub_id));
     let qwen_responses_compat = is_qwen_provider_name(&turn_context.provider.info().name);
     let mut qwen_reasoning_text = String::new();
-    let mut qwen_saw_tool_output = qwen_responses_compat
-        && prompt.input.iter().any(|item| {
-            matches!(
-                item,
-                ResponseItem::FunctionCallOutput { .. }
-                    | ResponseItem::CustomToolCallOutput { .. }
-                    | ResponseItem::ToolSearchOutput { .. }
-            )
-        });
+    let qwen_last_tool_output_text = qwen_responses_compat
+        .then(|| qwen_last_tool_output_text(&prompt.input))
+        .flatten();
+    let mut qwen_saw_tool_output = qwen_last_tool_output_text.is_some();
     let receiving_span = trace_span!("receiving_stream");
     let outcome: CodexResult<SamplingRequestResult> = loop {
         let handle_responses = trace_span!(
@@ -2145,6 +2141,7 @@ async fn try_run_sampling_request(
                         &qwen_reasoning_text,
                         needs_follow_up,
                         qwen_saw_tool_output,
+                        qwen_last_tool_output_text.as_deref(),
                     )
                 {
                     let mut ctx = HandleOutputCtx {
