@@ -13,9 +13,11 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
-For a class or demo, use one local Qwen/vLLM compose file, install once with the model `/v1` URL, then run `qwen-codex` from any repository.
+### Plug-and-play em 3 comandos
 
-For the video/classroom flow, these are the only three commands students need on WSL2/Linux/macOS:
+For a class or demo, students only need to copy and paste three commands: start the bundled local Qwen/vLLM model, install Qwen Codex with that model URL, then run `qwen-codex`. No `.env` file is needed for the bundled classroom setup.
+
+WSL2/Linux/macOS:
 
 ```sh
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
@@ -23,7 +25,7 @@ docker compose -f deploy/qwen-9b/docker-compose.yml up -d
 qwen-codex
 ```
 
-On Windows PowerShell, use the PowerShell install command as the middle command:
+Windows PowerShell:
 
 ```powershell
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
@@ -38,7 +40,7 @@ curl http://127.0.0.1:8002/v1/models
 qwen-codex --health
 ```
 
-No `.env` file is needed for the bundled classroom demo. The install scripts build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+The install scripts build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
 
 If a student already has another OpenAI-compatible Qwen server, replace only the URL:
 
