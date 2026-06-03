@@ -13,15 +13,16 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
-### Plug-and-play em 3 comandos
+### Plug-and-play
 
-For a class or demo, students only need to copy and paste three commands: start the bundled local Qwen/vLLM model, install Qwen Codex with that model URL, then run `qwen-codex`. No `.env` file is needed for the bundled classroom setup.
+For a class or demo, students only need to start the bundled local Qwen/vLLM model, write the model URL to `.env`, build/install Qwen Codex, then run `qwen-codex`.
 
 WSL2/Linux/macOS:
 
 ```sh
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-./scripts/install-qwen-codex.sh http://127.0.0.1:8002/v1
+printf '%s\n' 'QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1' 'QWEN_CODEX_API_KEY=local-dev-key' 'QWEN_CODEX_MODEL=qwen35-local' 'QWEN_CODEX_CONTEXT_WINDOW=32768' > .env
+./scripts/install-qwen-codex.sh
 qwen-codex
 ```
 
@@ -29,7 +30,13 @@ Windows PowerShell:
 
 ```powershell
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-.\scripts\install-qwen-codex.ps1 -BaseUrl http://127.0.0.1:8002/v1
+@"
+QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1
+QWEN_CODEX_API_KEY=local-dev-key
+QWEN_CODEX_MODEL=qwen35-local
+QWEN_CODEX_CONTEXT_WINDOW=32768
+"@ | Set-Content -Encoding ASCII .env
+.\scripts\install-qwen-codex.ps1
 qwen-codex
 ```
 
@@ -40,13 +47,13 @@ curl http://127.0.0.1:8002/v1/models
 qwen-codex --health
 ```
 
-The install scripts build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+The install scripts read `.env`, build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
 
-If a student already has another OpenAI-compatible Qwen server, replace only the URL:
+If a student already has another OpenAI-compatible Qwen server, change only `QWEN_CODEX_BASE_URL` in `.env`, rerun the install command, then run `qwen-codex`.
 
 ```sh
-./scripts/install-qwen-codex.sh http://STUDENT_MODEL_HOST:PORT/v1
-qwen-codex --health
+printf '%s\n' 'QWEN_CODEX_BASE_URL=http://STUDENT_MODEL_HOST:PORT/v1' 'QWEN_CODEX_API_KEY=local-dev-key' 'QWEN_CODEX_MODEL=qwen35-local' 'QWEN_CODEX_CONTEXT_WINDOW=32768' > .env
+./scripts/install-qwen-codex.sh
 qwen-codex
 ```
 

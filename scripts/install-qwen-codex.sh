@@ -6,11 +6,13 @@ usage() {
 Usage:
   scripts/install-qwen-codex.sh [BASE_URL] [--release]
 
-Builds the local source tree, stores the Qwen /v1 URL, and installs commands into:
+Reads .env when present, builds the local source tree, stores the Qwen /v1 URL,
+and installs commands into:
   ${QWEN_CODEX_INSTALL_DIR:-$HOME/.local/bin}
 
 Example:
-  scripts/install-qwen-codex.sh http://127.0.0.1:8002/v1
+  printf '%s\n' 'QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1' > .env
+  scripts/install-qwen-codex.sh
 
 After this, run:
   qwen-codex
@@ -24,6 +26,14 @@ fi
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
+
+if [[ -f "$repo_root/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . "$repo_root/.env"
+  set +a
+fi
+
 install_dir="${QWEN_CODEX_INSTALL_DIR:-$HOME/.local/bin}"
 profile_dir="debug"
 cargo_args=(build -p codex-cli --bins)

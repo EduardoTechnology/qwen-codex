@@ -7,6 +7,45 @@ param(
     [string]$InstallDir = (Join-Path $env:USERPROFILE ".cargo\bin")
 )
 
+$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RepoRoot = Split-Path -Parent $ScriptDir
+
+function Import-QwenDotEnv {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return
+    }
+
+    Get-Content -Path $Path | ForEach-Object {
+        $Line = $_.Trim()
+        if ($Line.Length -eq 0 -or $Line.StartsWith("#") -or -not $Line.Contains("=")) {
+            return
+        }
+        $Parts = $Line.Split("=", 2)
+        $Name = $Parts[0].Trim()
+        $Value = $Parts[1].Trim().Trim('"').Trim("'")
+        if ($Name -match "^[A-Za-z_][A-Za-z0-9_]*$" -and [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($Name, "Process"))) {
+            [Environment]::SetEnvironmentVariable($Name, $Value, "Process")
+        }
+    }
+}
+
+Import-QwenDotEnv -Path (Join-Path $RepoRoot ".env")
+
+if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
+    $BaseUrl = $env:QWEN_CODEX_BASE_URL
+}
+if ([string]::IsNullOrWhiteSpace($Model)) {
+    $Model = $env:QWEN_CODEX_MODEL
+}
+if ([string]::IsNullOrWhiteSpace($ApiKey)) {
+    $ApiKey = $env:QWEN_CODEX_API_KEY
+}
+if ([string]::IsNullOrWhiteSpace($ContextWindow)) {
+    $ContextWindow = $env:QWEN_CODEX_CONTEXT_WINDOW
+}
+
 if ([string]::IsNullOrWhiteSpace($BaseUrl)) {
     $BaseUrl = "http://127.0.0.1:8002/v1"
 }
@@ -15,8 +54,6 @@ if ([string]::IsNullOrWhiteSpace($ApiKey)) {
 }
 
 $BaseUrl = $BaseUrl.TrimEnd("/")
-$ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$RepoRoot = Split-Path -Parent $ScriptDir
 $ProfileDir = if ($Release) { "release" } else { "debug" }
 $CargoArgs = @("build", "-p", "codex-cli", "--bins")
 if ($Release) {
