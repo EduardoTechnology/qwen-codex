@@ -11,7 +11,7 @@ pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:8002/v1";
 pub const DEFAULT_API_KEY: &str = "local-dev-key";
 pub const DEFAULT_MODEL: &str = "qwen35-local";
 pub const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
-pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 120_000;
+pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 600_000;
 pub const DEFAULT_LOG_LEVEL: &str = "error";
 pub const DEFAULT_REASONING_PARSER: &str = "qwen3";
 pub const DEFAULT_TOOL_CALL_PARSER: &str = "qwen3_coder";
@@ -368,6 +368,7 @@ impl ResolvedQwenConfig {
         let mut overrides = vec![
             format!("model_provider={}", toml_string_literal(QWEN_PROVIDER_ID)),
             format!("model={}", toml_string_literal(&self.model)),
+            format!("model_reasoning_effort={}", toml_string_literal("medium")),
             format!("model_context_window={}", self.context_window),
             format!(
                 "model_auto_compact_token_limit={}",
@@ -656,6 +657,7 @@ mod tests {
 
         assert!(overrides.contains("model_context_window=32768"));
         assert!(overrides.contains("model_auto_compact_token_limit=26214"));
+        assert!(overrides.contains("model_reasoning_effort=\"medium\""));
     }
 
     #[test]

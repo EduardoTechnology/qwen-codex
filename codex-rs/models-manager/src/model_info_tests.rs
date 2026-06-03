@@ -1,5 +1,6 @@
 use super::*;
 use crate::ModelsManagerConfig;
+use codex_protocol::openai_models::ReasoningEffort;
 use pretty_assertions::assert_eq;
 
 #[test]
@@ -25,13 +26,16 @@ fn qwen_local_model_instructions_include_tool_guidance() {
 
     assert!(!model.used_fallback_model_metadata);
     assert_eq!(model.context_window, Some(32_768));
+    assert_eq!(model.default_reasoning_level, Some(ReasoningEffort::Medium));
     assert!(instructions.contains("Qwen local tool guidance"));
     assert!(instructions.contains("Do not invent MCP servers"));
     assert!(instructions.contains("Never call MCP resources for local file reads"));
     assert!(instructions.contains("simple file read/transcription requests"));
     assert!(instructions.contains("Path.write_text"));
     assert!(instructions.contains("Avoid wrapping heredoc commands in double quotes"));
+    assert!(instructions.contains("Do not call image-view tools"));
     assert!(instructions.contains("node --check"));
+    assert!(instructions.contains("repair the file and rerun validation"));
 }
 
 #[test]

@@ -369,7 +369,7 @@ mod tests {
         assert_eq!(crate::config::DEFAULT_BASE_URL, "http://127.0.0.1:8002/v1");
         assert_eq!(crate::config::DEFAULT_MODEL, "qwen35-local");
         assert_eq!(crate::config::DEFAULT_CONTEXT_WINDOW, 32_768);
-        assert_eq!(crate::config::DEFAULT_REQUEST_TIMEOUT_MS, 120_000);
+        assert_eq!(crate::config::DEFAULT_REQUEST_TIMEOUT_MS, 600_000);
         assert_eq!(crate::config::DEFAULT_LOG_LEVEL, "error");
     }
 }

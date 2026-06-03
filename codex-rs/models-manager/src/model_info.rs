@@ -4,6 +4,7 @@ use codex_protocol::openai_models::ModelInfo;
 use codex_protocol::openai_models::ModelInstructionsVariables;
 use codex_protocol::openai_models::ModelMessages;
 use codex_protocol::openai_models::ModelVisibility;
+use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::openai_models::TruncationMode;
 use codex_protocol::openai_models::TruncationPolicyConfig;
 use codex_protocol::openai_models::WebSearchToolType;
@@ -27,7 +28,9 @@ const LOCAL_QWEN_TOOL_GUIDANCE: &str = r#"Qwen local tool guidance:
 - For simple file read/transcription requests, use direct shell commands such as `tail -n 3 README.md`, `sed -n`, or `cat`, then include the requested text in the final answer.
 - For JSON/JS/TS/HTML/CSS multi-line writes, prefer `python3 - <<'PY'` plus `Path.write_text(..., encoding="utf-8")`.
 - Avoid wrapping heredoc commands in double quotes when the file content contains quotes.
-- After writing files, validate before claiming completion: `python3 -m json.tool` for JSON, `node --check` for JS, and `docker compose config` for Compose/YAML."#;
+- Treat HTML/CSS/JS/JSON source files as text, not images. Do not call image-view tools on files such as `index.html`; inspect them with `cat`, `sed`, or Python.
+- After writing files, validate before claiming completion: `python3 -m json.tool` for JSON, `node --check` for JS, `docker compose config` for Compose/YAML, and a quick text/Python check for required HTML/CSS content.
+- If a validation or tool command reports an error, repair the file and rerun validation before giving the final answer."#;
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
@@ -79,7 +82,7 @@ pub fn model_info_from_slug(slug: &str) -> ModelInfo {
             slug: slug.to_string(),
             display_name: "Qwen 3.5 local".to_string(),
             description: Some("Local Qwen OpenAI-compatible model".to_string()),
-            default_reasoning_level: None,
+            default_reasoning_level: Some(ReasoningEffort::Medium),
             supported_reasoning_levels: Vec::new(),
             shell_type: ConfigShellToolType::Default,
             visibility: ModelVisibility::None,
