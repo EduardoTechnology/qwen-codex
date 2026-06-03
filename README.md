@@ -15,14 +15,14 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ### Plug-and-play
 
-For a class or demo, students only need to start the bundled local Qwen/vLLM model, write the model URL to `.env`, build/install Qwen Codex, then run `qwen-codex`.
+For a class or demo, students only need to start the bundled local Qwen/vLLM model, put the model URL in `.env`, build/install Qwen Codex, then run `qwen-codex`. No install script is required.
 
 WSL2/Linux/macOS:
 
 ```sh
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-printf '%s\n' 'QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1' 'QWEN_CODEX_API_KEY=local-dev-key' 'QWEN_CODEX_MODEL=qwen35-local' 'QWEN_CODEX_CONTEXT_WINDOW=32768' > .env
-./scripts/install-qwen-codex.sh
+cp .env.example .env
+cargo install --path codex-rs/cli --bins --locked --force
 qwen-codex
 ```
 
@@ -30,15 +30,16 @@ Windows PowerShell:
 
 ```powershell
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-@"
-QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1
-QWEN_CODEX_API_KEY=local-dev-key
-QWEN_CODEX_MODEL=qwen35-local
-QWEN_CODEX_CONTEXT_WINDOW=32768
-"@ | Set-Content -Encoding ASCII .env
-.\scripts\install-qwen-codex.ps1
+Copy-Item .env.example .env
+cargo install --path codex-rs/cli --bins --locked --force
 qwen-codex
 ```
+
+If your model is not running at `http://127.0.0.1:8002/v1`, edit `.env` and change only `QWEN_CODEX_BASE_URL`.
+
+The bundled compose downloads `QuantTrio/Qwen3.5-9B-AWQ`, but exposes it to the agent as the stable local id `qwen35-local`. This is intentional for classes: students can change the downloaded model in `deploy/qwen-9b/docker-compose.yml` and keep `--served-model-name qwen35-local`, so no extra `.env` setting is needed.
+
+If a student also changes `--served-model-name`, uncomment `QWEN_CODEX_MODEL` in `.env` and set it to the exact id returned by `/v1/models`.
 
 Optional checks:
 
@@ -47,14 +48,13 @@ curl http://127.0.0.1:8002/v1/models
 qwen-codex --health
 ```
 
-The install scripts read `.env`, build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+`qwen-codex` reads `.env` from the current directory when it starts. Run it from a folder that contains `.env`, or set `QWEN_CODEX_BASE_URL` in your shell environment.
 
-If a student already has another OpenAI-compatible Qwen server, change only `QWEN_CODEX_BASE_URL` in `.env`, rerun the install command, then run `qwen-codex`.
+If a student already has another OpenAI-compatible Qwen server, change `QWEN_CODEX_BASE_URL` in `.env`, then run `qwen-codex`. Set `QWEN_CODEX_MODEL` only if that server does not expose `qwen35-local`.
 
-```sh
-printf '%s\n' 'QWEN_CODEX_BASE_URL=http://STUDENT_MODEL_HOST:PORT/v1' 'QWEN_CODEX_API_KEY=local-dev-key' 'QWEN_CODEX_MODEL=qwen35-local' 'QWEN_CODEX_CONTEXT_WINDOW=32768' > .env
-./scripts/install-qwen-codex.sh
-qwen-codex
+```dotenv
+QWEN_CODEX_BASE_URL=http://STUDENT_MODEL_HOST:PORT/v1
+# QWEN_CODEX_MODEL=the-model-id-shown-by-v1-models
 ```
 
 Classroom demo prompt:
@@ -62,14 +62,6 @@ Classroom demo prompt:
 ```text
 Create a tiny static website for a coding class. Create index.html and styles.css using safe file writing methods. The page must visibly show the title Qwen Codex Aula, exactly three bullet points about local AI coding, and a button labeled Testar agente. Then validate with a local command that reads the files and asserts the required text exists. Answer only with PASS and the files created if validation passes.
 ```
-
-For a Cargo release-style install instead:
-
-```sh
-cargo install --path codex-rs/cli --bins --locked --force
-```
-
-With the Cargo install path, configure the endpoint through `QWEN_CODEX_BASE_URL` before running `qwen-codex`.
 
 The compatibility alias is also built:
 
@@ -85,8 +77,8 @@ The verified local baseline is:
 - Base URL: `http://127.0.0.1:8002/v1`
 - Container port: `8000`
 - Host port: `8002`
-- Served model: `qwen35-local`
-- Model repository: `QuantTrio/Qwen3.5-9B-AWQ`
+- Served model alias: `qwen35-local`
+- Downloaded model repository: `QuantTrio/Qwen3.5-9B-AWQ`
 - Context window: `32768`
 - GPU memory utilization: `0.90`
 - Attention backend: `TRITON_ATTN`

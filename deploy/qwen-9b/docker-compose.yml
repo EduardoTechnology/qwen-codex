@@ -23,6 +23,8 @@ services:
       start_period: 600s
       retries: 20
     entrypoint: ["python3", "-m", "vllm.entrypoints.openai.api_server"]
+    # To try a lighter model, change only --model first and keep
+    # --served-model-name qwen35-local so qwen-codex does not need another env var.
     command:
       - --model
       - QuantTrio/Qwen3.5-9B-AWQ
