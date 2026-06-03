@@ -51,7 +51,8 @@ yarn-error.log*
 .qwen-codex/
 
 # env
-.env*
+.env.*
+!.env
 !.env.example
 .venv/
 

@@ -15,14 +15,13 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ### Plug-and-play
 
-For a class or demo, students only need to start the bundled local Qwen/vLLM model, put the model URL in `.env`, build/install Qwen Codex, then run `qwen-codex`. No install script is required.
+For a class or demo, students only need to start the bundled local Qwen/vLLM model, build/install Qwen Codex, then run `qwen-codex`. The repository already includes a safe default `.env` for `http://127.0.0.1:8002/v1`.
 
 WSL2/Linux/macOS:
 
 ```sh
 docker compose up -d
-cp .env.example .env
-cargo install --path codex-rs/cli --bins --locked --force
+cargo install --path codex-rs/cli --bin qwen-codex --locked --force
 qwen-codex
 ```
 
@@ -30,8 +29,7 @@ Windows PowerShell:
 
 ```powershell
 docker compose up -d
-Copy-Item .env.example .env
-cargo install --path codex-rs/cli --bins --locked --force
+cargo install --path codex-rs/cli --bin qwen-codex --locked --force
 qwen-codex
 ```
 
