@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-05-03T04:40:30Z
+Last updated: 2026-06-03T12:32:23-03:00
 
 ## Verified Local Qwen/vLLM Server
 
@@ -10,6 +10,7 @@ The local vLLM server is healthy with the Qwen Codex baseline configuration:
 - Container port: `8000`
 - Host port: `8002`
 - Models endpoint: `http://127.0.0.1:8002/v1/models`
+- Compose file: `deploy/qwen-9b/docker-compose.yml`
 - Served model: `qwen35-local`
 - Model repository: `QuantTrio/Qwen3.5-9B-AWQ`
 - `max_model_len`: `32768`
@@ -17,13 +18,18 @@ The local vLLM server is healthy with the Qwen Codex baseline configuration:
 - Attention backend: `TRITON_ATTN`
 - Container status: healthy
 - `/v1/models` reports `max_model_len: 32768`
+- KV cache after startup: `74472` tokens, `2.27x` concurrency for `32768` tokens per request
 
 Log lines observed from the healthy container:
 
 ```text
-Using backend AttentionBackendEnum.TRITON_ATTN for vit attention
-Using AttentionBackendEnum.TRITON_ATTN for MMEncoderAttention
+enable_auto_tool_choice: True
+tool_call_parser: qwen3_coder
+reasoning_parser: qwen3
+generation_config: vllm
 Using AttentionBackendEnum.TRITON_ATTN backend
+GPU KV cache size: 74,472 tokens
+Maximum concurrency for 32,768 tokens per request: 2.27x
 Starting vLLM server on http://0.0.0.0:8000
 ```
 
@@ -51,6 +57,17 @@ curl -s http://127.0.0.1:8002/v1/chat/completions \
 ```
 
 Observed result: the model returned `4`. Very low token limits can return only reasoning content because the Qwen reasoning parser may consume the token budget before the final answer.
+
+Classroom smoke verification:
+
+```sh
+docker compose -f deploy/qwen-9b/docker-compose.yml config
+docker compose -f deploy/qwen-9b/docker-compose.yml up -d --remove-orphans
+qwen-codex --health
+qwen-codex "Create hello.txt containing exactly qwen codex ok, then read hello.txt and answer with the exact file content."
+```
+
+Observed result: the final compose started healthy on port `8002`; `qwen-codex --health` passed; the guided agent smoke used shell commands, corrected a literal newline write, read `hello.txt` back with `cat`, and answered `qwen codex ok` without an unknown local-file MCP attempt.
 
 ## Qwen Responses API Compatibility
 
@@ -382,8 +399,9 @@ Checks run:
 - `cd codex-rs && ./target/debug/qwen-codex --version`: passed.
 - `cd codex-rs && ./target/debug/qwencodex --help`: passed.
 - `cd codex-rs && ./target/debug/qwen-codex --health`: passed and returned `max_model_len: 32768`.
-- `docker compose -f modelo/docker-compose.qwen35-9b-awq.yml config`: passed and shows host port `8002`, container port `8000`, `TRITON_ATTN`, `qwen3`, `qwen3_coder`, and `{"enable_thinking": false}`.
+- `docker compose -f deploy/qwen-9b/docker-compose.yml config`: passed and shows host port `8002`, container port `8000`, `TRITON_ATTN`, `qwen3`, `qwen3_coder`, `--enable-auto-tool-choice`, and `{"enable_thinking": false}`.
 - `qwen-codex "What is 2+2? Answer in one word."`: passed against `http://127.0.0.1:8002/v1`; visible assistant text was `4`.
+- Classroom static-site smoke in `/tmp/qwen-codex-video-site`: passed. The local agent created `index.html` and `styles.css` with Python `Path.write_text`, validated the required title, three bullets, and button text, and an external `python3 -m http.server` plus `curl` check found `Qwen Codex Aula` and `Testar agente`.
 
 ## YOLO Mode Milestone Status
 

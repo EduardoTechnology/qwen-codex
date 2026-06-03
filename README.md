@@ -13,9 +13,16 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ## Quickstart
 
-Install the CLI once with your Qwen `/v1` URL, then run `qwen-codex` directly from any repository.
+For a class or demo, use one local Qwen/vLLM compose file, install once with the model `/v1` URL, then run `qwen-codex` from any repository.
 
-WSL2/Linux/macOS:
+Start the bundled local model:
+
+```sh
+docker compose -f deploy/qwen-9b/docker-compose.yml up -d
+curl http://127.0.0.1:8002/v1/models
+```
+
+Install and run on WSL2/Linux/macOS:
 
 ```sh
 ./scripts/install-qwen-codex.sh http://127.0.0.1:8002/v1
@@ -23,7 +30,7 @@ qwen-codex --health
 qwen-codex
 ```
 
-Windows PowerShell:
+Install and run on Windows PowerShell:
 
 ```powershell
 .\scripts\install-qwen-codex.ps1 -BaseUrl http://127.0.0.1:8002/v1
@@ -31,7 +38,21 @@ qwen-codex --health
 qwen-codex
 ```
 
-The install scripts build all local CLI binaries, detect the model from `/v1/models` when available, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+No `.env` file is needed for the bundled classroom demo. The install scripts build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
+
+If a student already has another OpenAI-compatible Qwen server, replace only the URL:
+
+```sh
+./scripts/install-qwen-codex.sh http://STUDENT_MODEL_HOST:PORT/v1
+qwen-codex --health
+qwen-codex
+```
+
+Classroom demo prompt:
+
+```text
+Create a tiny static website for a coding class. Create index.html and styles.css using safe file writing methods. The page must visibly show the title Qwen Codex Aula, exactly three bullet points about local AI coding, and a button labeled Testar agente. Then validate with a local command that reads the files and asserts the required text exists. Answer only with PASS and the files created if validation passes.
+```
 
 For a Cargo release-style install instead:
 
@@ -40,46 +61,6 @@ cargo install --path codex-rs/cli --bins --locked --force
 ```
 
 With the Cargo install path, configure the endpoint through `QWEN_CODEX_BASE_URL` before running `qwen-codex`.
-
-Bring any OpenAI-compatible Qwen server, copy its `/v1` URL, and run one command. The helper builds `qwen-codex`, detects the first model from `/v1/models` when possible, checks health, and sends the prompt:
-
-```sh
-./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "What is 2+2? Answer in one word."
-```
-
-On Windows PowerShell:
-
-```powershell
-.\scripts\qwen-codex-local.ps1 -BaseUrl http://127.0.0.1:8002/v1 -Prompt "What is 2+2? Answer in one word."
-```
-
-If the server does not expose `/v1/models`, set the model name explicitly:
-
-```sh
-QWEN_CODEX_MODEL=qwen35-local ./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "Summarize this repo."
-```
-
-Minimal environment form:
-
-```sh
-export QWEN_CODEX_BASE_URL=http://127.0.0.1:8002/v1
-export QWEN_CODEX_API_KEY=local-dev-key
-export QWEN_CODEX_MODEL=qwen35-local
-export QWEN_CODEX_CONTEXT_WINDOW=32768
-cd codex-rs
-cargo build -p codex-cli
-./target/debug/qwen-codex --health
-./target/debug/qwen-codex "Create hello.txt with one sentence, then read it back and tell me the exact text."
-```
-
-Optional bundled Qwen/vLLM server:
-
-```sh
-cp .env.example .env
-docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-curl http://127.0.0.1:8002/v1/models
-./scripts/qwen-codex-local.sh http://127.0.0.1:8002/v1 "Create hello.txt with one sentence, then read it back."
-```
 
 The compatibility alias is also built:
 
@@ -100,6 +81,8 @@ The verified local baseline is:
 - Context window: `32768`
 - GPU memory utilization: `0.90`
 - Attention backend: `TRITON_ATTN`
+- Auto tool choice: enabled
+- Tool-call parser: `qwen3_coder`
 - Reasoning parser: `qwen3`
 - Default chat template kwargs: `{"enable_thinking": false}`
 
@@ -109,7 +92,7 @@ Start the model with:
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
 ```
 
-The compose template keeps tool calling configurable through `VLLM_TOOL_CALL_PARSER`. The current default is `qwen3_coder`; `qwen3_xml` is another Qwen parser to test when changing model families or vLLM versions.
+The compose intentionally uses fixed values instead of shell-style environment defaults so it is easier to teach. The agent-critical vLLM flags for Qwen Codex are `--enable-auto-tool-choice`, `--tool-call-parser qwen3_coder`, `--reasoning-parser qwen3`, and `--default-chat-template-kwargs '{"enable_thinking": false}'`. The `TRITON_ATTN` and language-only flags are kept because this 9B AWQ setup needs the extra KV-cache headroom for the 32768-token context window.
 
 ## Configuration
 
@@ -283,7 +266,7 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 
 ## Documentation
 
-- [Bundled Qwen/vLLM compose](deploy/qwen-9b/docker-compose.yml)
+- [Classroom Qwen/vLLM compose](deploy/qwen-9b/docker-compose.yml)
 - [Modelo compose notes](modelo/README.md)
 - [YOLO mode](docs/yolo-mode.md)
 - [Verification](docs/verification.md)
@@ -292,4 +275,4 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 - [Roadmap](docs/roadmap.md)
 - [Contributing](CONTRIBUTING.md)
 
-Community model compose files belong under `modelo/` as `docker-compose.<model>.yml` with model, parser, GPU, and context-window notes. The plug-and-play local demo compose currently lives at `deploy/qwen-9b/docker-compose.yml`.
+The plug-and-play local demo compose lives at `deploy/qwen-9b/docker-compose.yml`.

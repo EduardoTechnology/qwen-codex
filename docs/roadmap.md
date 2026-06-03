@@ -39,12 +39,12 @@ This roadmap tracks work that remains after the normal CLI and initial YOLO mile
 - Design a safer context/auto-compaction YOLO stress test near the 32768-token Qwen context limit. The 10-round notes run stayed below the compaction threshold, and the 15-round compact-pressure attempt was blocked by a long first agent turn that hit `round_timeout` before resumed-turn compaction pressure was reached.
 - Exercise a live rejected-`YOLO_STOP` path. The focused test covers it, but the live model did not emit `YOLO_STOP` in the impossible-acceptance run.
 - Expand integration coverage around Codex JSON event parsing if upstream event shapes change.
-- Add more community model compose files under `modelo/`.
+- Keep the public model setup focused on one classroom compose file.
 - Prepare release packaging and repository metadata for the Qwen Codex fork.
 
 ## Extension Points
 
-- Add model compose files as `modelo/docker-compose.<model>.yml`.
+- Add future model compose variants only when they are verified and clearly documented.
 - Keep model-specific parser flags in compose/docs, not in runtime Rust defaults.
 - Add future YOLO summarizers under `codex-rs/qwen/src/yolo/` without touching `codex-core` unless upstream exposes a better public API.
 - Prefer upstream Codex tool, skill, MCP, shell, and context-compaction APIs over fork-local alternatives.

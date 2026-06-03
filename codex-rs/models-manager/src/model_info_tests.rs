@@ -27,8 +27,11 @@ fn qwen_local_model_instructions_include_tool_guidance() {
     assert_eq!(model.context_window, Some(32_768));
     assert!(instructions.contains("Qwen local tool guidance"));
     assert!(instructions.contains("Do not invent MCP servers"));
+    assert!(instructions.contains("Never call MCP resources for local file reads"));
     assert!(instructions.contains("simple file read/transcription requests"));
     assert!(instructions.contains("Path.write_text"));
+    assert!(instructions.contains("Avoid wrapping heredoc commands in double quotes"));
+    assert!(instructions.contains("node --check"));
 }
 
 #[test]

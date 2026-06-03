@@ -33,7 +33,7 @@ Verified local server:
 - Model repository: `QuantTrio/Qwen3.5-9B-AWQ`
 - Context window: `32768`
 - Auto-compact threshold propagated to Codex: `26214`
-- Compose file: `modelo/docker-compose.qwen35-9b-awq.yml`
+- Compose file: `deploy/qwen-9b/docker-compose.yml`
 - `/v1/models`: healthy in prior verification and reports `max_model_len=32768`
 
 ## Capability Matrix

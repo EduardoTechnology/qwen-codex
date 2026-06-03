@@ -23,8 +23,11 @@ const LOCAL_QWEN_CONTEXT_WINDOW: i64 = 32_768;
 const LOCAL_QWEN_TOOL_GUIDANCE: &str = r#"Qwen local tool guidance:
 - Use only tools and MCP servers that are listed in the current session.
 - Do not invent MCP servers such as `files`, `filesystem`, or `git`; use shell commands like `ls`, `find`, `cat`, `git`, `python3`, `node`, and `docker compose` when safe.
+- Never call MCP resources for local file reads. For local files, always use shell commands such as `cat`, `sed`, `tail`, or `find`.
 - For simple file read/transcription requests, use direct shell commands such as `tail -n 3 README.md`, `sed -n`, or `cat`, then include the requested text in the final answer.
-- For JSON/JS/TS/HTML/CSS files, prefer Python `Path.write_text` for multi-line writes and validate JSON/JS/YAML before claiming completion."#;
+- For JSON/JS/TS/HTML/CSS multi-line writes, prefer `python3 - <<'PY'` plus `Path.write_text(..., encoding="utf-8")`.
+- Avoid wrapping heredoc commands in double quotes when the file content contains quotes.
+- After writing files, validate before claiming completion: `python3 -m json.tool` for JSON, `node --check` for JS, and `docker compose config` for Compose/YAML."#;
 const PERSONALITY_PLACEHOLDER: &str = "{{ personality }}";
 
 pub fn with_config_overrides(mut model: ModelInfo, config: &ModelsManagerConfig) -> ModelInfo {
