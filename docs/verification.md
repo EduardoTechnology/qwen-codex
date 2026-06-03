@@ -1,6 +1,6 @@
 # Verification
 
-Last updated: 2026-06-03T12:32:23-03:00
+Last updated: 2026-06-03T13:25:45-03:00
 
 ## Verified Local Qwen/vLLM Server
 
@@ -18,7 +18,7 @@ The local vLLM server is healthy with the Qwen Codex baseline configuration:
 - Attention backend: `TRITON_ATTN`
 - Container status: healthy
 - `/v1/models` reports `max_model_len: 32768`
-- KV cache after startup: `74472` tokens, `2.27x` concurrency for `32768` tokens per request
+- KV cache after startup: `68514` tokens, `2.09x` concurrency for `32768` tokens per request
 
 Log lines observed from the healthy container:
 
@@ -28,8 +28,8 @@ tool_call_parser: qwen3_coder
 reasoning_parser: qwen3
 generation_config: vllm
 Using AttentionBackendEnum.TRITON_ATTN backend
-GPU KV cache size: 74,472 tokens
-Maximum concurrency for 32,768 tokens per request: 2.27x
+GPU KV cache size: 68,514 tokens
+Maximum concurrency for 32,768 tokens per request: 2.09x
 Starting vLLM server on http://0.0.0.0:8000
 ```
 

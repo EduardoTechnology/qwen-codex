@@ -55,7 +55,6 @@ services:
       - "1"
       - --enforce-eager
       - --language-model-only
-      - --disable-custom-all-reduce
 
 volumes:
   qwen_huggingface_cache:

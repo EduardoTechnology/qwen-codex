@@ -15,27 +15,27 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 For a class or demo, use one local Qwen/vLLM compose file, install once with the model `/v1` URL, then run `qwen-codex` from any repository.
 
-Start the bundled local model:
+For the video/classroom flow, these are the only three commands students need on WSL2/Linux/macOS:
 
 ```sh
 docker compose -f deploy/qwen-9b/docker-compose.yml up -d
-curl http://127.0.0.1:8002/v1/models
-```
-
-Install and run on WSL2/Linux/macOS:
-
-```sh
 ./scripts/install-qwen-codex.sh http://127.0.0.1:8002/v1
-qwen-codex --health
 qwen-codex
 ```
 
-Install and run on Windows PowerShell:
+On Windows PowerShell, use the PowerShell install command as the middle command:
 
 ```powershell
+docker compose -f deploy/qwen-9b/docker-compose.yml up -d
 .\scripts\install-qwen-codex.ps1 -BaseUrl http://127.0.0.1:8002/v1
-qwen-codex --health
 qwen-codex
+```
+
+Optional checks:
+
+```sh
+curl http://127.0.0.1:8002/v1/models
+qwen-codex --health
 ```
 
 No `.env` file is needed for the bundled classroom demo. The install scripts build all local CLI binaries, detect the model from `/v1/models`, store that endpoint in the installed `qwen-codex` command, and put it on the current environment's PATH. WSL2/Linux/macOS and Windows PowerShell have separate PATHs, so run the matching script in the environment where you want to use the command.
@@ -93,6 +93,7 @@ docker compose -f deploy/qwen-9b/docker-compose.yml up -d
 ```
 
 The compose intentionally uses fixed values instead of shell-style environment defaults so it is easier to teach. The agent-critical vLLM flags for Qwen Codex are `--enable-auto-tool-choice`, `--tool-call-parser qwen3_coder`, `--reasoning-parser qwen3`, and `--default-chat-template-kwargs '{"enable_thinking": false}'`. The `TRITON_ATTN` and language-only flags are kept because this 9B AWQ setup needs the extra KV-cache headroom for the 32768-token context window.
+`--enforce-eager` is also kept because this local WSL/GPU setup otherwise triggered a KV-cache startup failure before eventually restarting.
 
 ## Configuration
 
