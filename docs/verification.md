@@ -10,7 +10,7 @@ The local vLLM server is healthy with the Qwen Codex baseline configuration:
 - Container port: `8000`
 - Host port: `8002`
 - Models endpoint: `http://127.0.0.1:8002/v1/models`
-- Compose file: `deploy/qwen-9b/docker-compose.yml`
+- Compose file: `docker-compose.yml`
 - Served model: `qwen35-local`
 - Model repository: `QuantTrio/Qwen3.5-9B-AWQ`
 - `max_model_len`: `32768`
@@ -61,8 +61,8 @@ Observed result: the model returned `4`. Very low token limits can return only r
 Classroom smoke verification:
 
 ```sh
-docker compose -f deploy/qwen-9b/docker-compose.yml config
-docker compose -f deploy/qwen-9b/docker-compose.yml up -d --remove-orphans
+docker compose config
+docker compose up -d --remove-orphans
 qwen-codex --health
 qwen-codex "Create hello.txt containing exactly qwen codex ok, then read hello.txt and answer with the exact file content."
 ```
@@ -399,7 +399,7 @@ Checks run:
 - `cd codex-rs && ./target/debug/qwen-codex --version`: passed.
 - `cd codex-rs && ./target/debug/qwencodex --help`: passed.
 - `cd codex-rs && ./target/debug/qwen-codex --health`: passed and returned `max_model_len: 32768`.
-- `docker compose -f deploy/qwen-9b/docker-compose.yml config`: passed and shows host port `8002`, container port `8000`, `TRITON_ATTN`, `qwen3`, `qwen3_coder`, `--enable-auto-tool-choice`, and `{"enable_thinking": false}`.
+- `docker compose config`: passed and shows host port `8002`, container port `8000`, `TRITON_ATTN`, `qwen3`, `qwen3_coder`, `--enable-auto-tool-choice`, and `{"enable_thinking": false}`.
 - `qwen-codex "What is 2+2? Answer in one word."`: passed against `http://127.0.0.1:8002/v1`; visible assistant text was `4`.
 - Classroom static-site smoke in `/tmp/qwen-codex-video-site`: passed. The local agent created `index.html` and `styles.css` with Python `Path.write_text`, validated the required title, three bullets, and button text, and an external `python3 -m http.server` plus `curl` check found `Qwen Codex Aula` and `Testar agente`.
 

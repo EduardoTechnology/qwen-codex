@@ -20,7 +20,7 @@ For a class or demo, students only need to start the bundled local Qwen/vLLM mod
 WSL2/Linux/macOS:
 
 ```sh
-docker compose -f deploy/qwen-9b/docker-compose.yml up -d
+docker compose up -d
 cp .env.example .env
 cargo install --path codex-rs/cli --bins --locked --force
 qwen-codex
@@ -29,7 +29,7 @@ qwen-codex
 Windows PowerShell:
 
 ```powershell
-docker compose -f deploy/qwen-9b/docker-compose.yml up -d
+docker compose up -d
 Copy-Item .env.example .env
 cargo install --path codex-rs/cli --bins --locked --force
 qwen-codex
@@ -37,7 +37,7 @@ qwen-codex
 
 If your model is not running at `http://127.0.0.1:8002/v1`, edit `.env` and change only `QWEN_CODEX_BASE_URL`.
 
-The bundled compose downloads `QuantTrio/Qwen3.5-9B-AWQ`, but exposes it to the agent as the stable local id `qwen35-local`. This is intentional for classes: students can change the downloaded model in `deploy/qwen-9b/docker-compose.yml` and keep `--served-model-name qwen35-local`, so no extra `.env` setting is needed.
+The bundled compose downloads `QuantTrio/Qwen3.5-9B-AWQ`, but exposes it to the agent as the stable local id `qwen35-local`. This is intentional for classes: students can change the downloaded model in `docker-compose.yml` and keep `--served-model-name qwen35-local`, so no extra `.env` setting is needed.
 
 If a student also changes `--served-model-name`, uncomment `QWEN_CODEX_MODEL` in `.env` and set it to the exact id returned by `/v1/models`.
 
@@ -90,7 +90,7 @@ The verified local baseline is:
 Start the model with:
 
 ```sh
-docker compose -f deploy/qwen-9b/docker-compose.yml up -d
+docker compose up -d
 ```
 
 The compose intentionally uses fixed values instead of shell-style environment defaults so it is easier to teach. The agent-critical vLLM flags for Qwen Codex are `--enable-auto-tool-choice`, `--tool-call-parser qwen3_coder`, `--reasoning-parser qwen3`, and `--default-chat-template-kwargs '{"enable_thinking": false}'`. The `TRITON_ATTN` and language-only flags are kept because this 9B AWQ setup needs the extra KV-cache headroom for the 32768-token context window.
@@ -254,7 +254,7 @@ pnpm run format
 
 `pnpm run format` emits a Node.js engine warning on Node v20; Node v22+ is required for full compatibility but formatting still passes.
 
-The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside that Docker Compose network, use the service hostname and container port, for example `http://qwen35:8000/v1`. Do not use host port `8000` if another local service already owns it.
+The provided compose maps host `http://127.0.0.1:8002/v1` to container port `8000`. Inside that Docker Compose network, use the service hostname and container port, for example `http://qwen-codex-model:8000/v1`. Do not use host port `8000` if another local service already owns it.
 
 When syncing from upstream, prefer merging `upstream/main` into this fork's `main` so Qwen-specific history remains visible:
 
@@ -268,8 +268,7 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 
 ## Documentation
 
-- [Classroom Qwen/vLLM compose](deploy/qwen-9b/docker-compose.yml)
-- [Modelo compose notes](modelo/README.md)
+- [Classroom Qwen/vLLM compose](docker-compose.yml)
 - [YOLO mode](docs/yolo-mode.md)
 - [Verification](docs/verification.md)
 - [Research notes](docs/research-notes.md)
@@ -277,4 +276,4 @@ See [docs/upstream-sync.md](docs/upstream-sync.md) for conflict priorities and v
 - [Roadmap](docs/roadmap.md)
 - [Contributing](CONTRIBUTING.md)
 
-The plug-and-play local demo compose lives at `deploy/qwen-9b/docker-compose.yml`.
+The plug-and-play local demo compose lives at `docker-compose.yml`.
