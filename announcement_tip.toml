@@ -4,12 +4,6 @@
 # version_regex matches against the CLI version (env!("CARGO_PKG_VERSION")); omit to apply to all versions.
 # target_app specify which app should display the announcement (cli, vsce, ...).
 
-# Test announcement only for local build version until 2027-05-10 excluded
-[[announcements]]
-content = "This is a test announcement"
-version_regex = "^0\\.0\\.0$"
-to_date = "2027-05-10"
-
 [[announcements]]
 content = "Update Required - This version will no longer be supported starting May 8th. Please upgrade to the latest version (https://github.com/openai/codex/releases/latest) using your preferred package manager."
 # Matches 0.x.y versions from 0.0.y through 0.119.y; excludes 0.120.0 and newer.
