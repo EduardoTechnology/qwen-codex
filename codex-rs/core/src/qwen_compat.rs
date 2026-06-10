@@ -11,8 +11,10 @@ const QWEN_TOOL_OUTPUT_ONLY_WARNING: &str =
 const QWEN_TOOL_OUTPUT_FALLBACK_MAX_CHARS: usize = 4_000;
 const QWEN_LOCAL_AGENT_GUIDANCE: &str = r#"Qwen local agent guidance:
 - For local file and repository inspection, use available shell commands such as `pwd`, `ls`, `find`, `head`, `sed`, `cat`, and `git status`.
+- In WSL, Windows paths like `C:\Users\name\project\file` map to `/mnt/c/Users/name/project/file`; if that mapped path is inside the current workspace, use the mapped shell path and proceed.
 - Do not request nonexistent MCP servers or resources such as `file`, `filesystem`, or `git`; if an MCP server/tool/resource is unavailable, switch to shell commands and do not retry it.
-- For JSON/JS/TS/HTML/CSS multi-line file writes, prefer Python `Path.write_text` or a single-quoted heredoc and run syntax validation before claiming completion."#;
+- For file creation/editing tasks, act through tools first; do not draft full file contents in the final answer. Write the file, run a small validation command, then answer briefly.
+- For JSON/JS/TS/HTML/CSS multi-line file writes, prefer Python `Path.write_text` or a single-quoted heredoc. Do not wrap the whole heredoc/write command in another quoted shell string. Run syntax validation before claiming completion."#;
 
 pub(crate) fn apply_qwen_responses_compat(
     provider: &Provider,

@@ -21,17 +21,19 @@ WSL2/Linux/macOS:
 
 ```sh
 docker compose up -d
-cargo build --manifest-path codex-rs/cli/Cargo.toml --bin codex --bin qwen-codex -j 1
-codex-rs/target/debug/qwen-codex
+cargo install --path codex-rs/cli --bin codex --bin qwen-codex --locked --force -j 1
+qwen-codex
 ```
 
 Windows PowerShell:
 
 ```powershell
 docker compose up -d
-cargo build --manifest-path codex-rs/cli/Cargo.toml --bin codex --bin qwen-codex -j 1
-.\codex-rs\target\debug\qwen-codex.exe
+cargo install --path codex-rs/cli --bin codex --bin qwen-codex --locked --force -j 1
+qwen-codex
 ```
+
+`cargo install` puts `qwen-codex` and `codex` in Cargo's bin directory, so the next command is simply `qwen-codex`. If the shell cannot find it, restart the terminal or make sure Cargo's bin directory is on `PATH`.
 
 If your model is not running at `http://127.0.0.1:8002/v1`, edit `.env` and change only `QWEN_CODEX_BASE_URL`.
 
