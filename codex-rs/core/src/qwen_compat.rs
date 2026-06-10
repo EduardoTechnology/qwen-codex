@@ -9,6 +9,10 @@ const QWEN_REASONING_ONLY_WARNING: &str = "Qwen Responses API returned reasoning
 const QWEN_TOOL_OUTPUT_ONLY_WARNING: &str =
     "Qwen Responses API returned tool output but no final assistant message.";
 const QWEN_TOOL_OUTPUT_FALLBACK_MAX_CHARS: usize = 4_000;
+const QWEN_LOCAL_AGENT_GUIDANCE: &str = r#"Qwen local agent guidance:
+- For local file and repository inspection, use available shell commands such as `pwd`, `ls`, `find`, `head`, `sed`, `cat`, and `git status`.
+- Do not request nonexistent MCP servers or resources such as `file`, `filesystem`, or `git`; if an MCP server/tool/resource is unavailable, switch to shell commands and do not retry it.
+- For JSON/JS/TS/HTML/CSS multi-line file writes, prefer Python `Path.write_text` or a single-quoted heredoc and run syntax validation before claiming completion."#;
 
 pub(crate) fn apply_qwen_responses_compat(
     provider: &Provider,
@@ -21,6 +25,7 @@ pub(crate) fn apply_qwen_responses_compat(
 
     remove_vllm_incompatible_history_items(input);
     normalize_message_content_for_vllm(input);
+    append_qwen_local_agent_guidance(instructions);
     let developer_messages = take_developer_messages(input);
     if developer_messages.is_empty() {
         return;
@@ -33,6 +38,16 @@ pub(crate) fn apply_qwen_responses_compat(
         instructions.push_str("\n\n");
         instructions.push_str(&developer_text);
     }
+}
+
+fn append_qwen_local_agent_guidance(instructions: &mut String) {
+    if instructions.contains(QWEN_LOCAL_AGENT_GUIDANCE) {
+        return;
+    }
+    if !instructions.trim().is_empty() {
+        instructions.push_str("\n\n");
+    }
+    instructions.push_str(QWEN_LOCAL_AGENT_GUIDANCE);
 }
 
 fn requires_developer_role_compat(provider: &Provider) -> bool {
@@ -380,8 +395,27 @@ mod tests {
 
         assert_eq!(
             instructions,
-            "base instructions\n\ndeveloper one\n\ndeveloper two"
+            format!(
+                "base instructions\n\n{QWEN_LOCAL_AGENT_GUIDANCE}\n\ndeveloper one\n\ndeveloper two"
+            )
         );
+        assert_eq!(input, vec![message("user", "hello")]);
+    }
+
+    #[test]
+    fn appends_local_file_and_mcp_guidance_for_qwen_provider() {
+        let provider = qwen_provider();
+        let mut instructions = "base instructions".to_string();
+        let mut input = vec![message("user", "hello")];
+
+        apply_qwen_responses_compat(&provider, &mut instructions, &mut input);
+
+        assert_eq!(
+            instructions,
+            format!("base instructions\n\n{QWEN_LOCAL_AGENT_GUIDANCE}")
+        );
+        assert!(instructions.contains("Do not request nonexistent MCP servers"));
+        assert!(instructions.contains("`file`, `filesystem`, or `git`"));
         assert_eq!(input, vec![message("user", "hello")]);
     }
 
