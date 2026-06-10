@@ -15,32 +15,25 @@ It is not a rewrite of the Codex agent. Normal mode and YOLO mode delegate back 
 
 ### Plug-and-play
 
-For a class or demo, students only need to build/install Qwen Codex, start the bundled local Qwen/vLLM model, then run `qwen-codex`. The repository already includes a safe default `.env` for `http://127.0.0.1:8002/v1`.
-
-Build the CLI before starting the model. The model container uses a lot of WSL memory, so compiling first is more reliable.
+For a class or demo, students only need to start the bundled local Qwen/vLLM model, build Qwen Codex, then run it. The repository already includes a safe default `.env` for `http://127.0.0.1:8002/v1`.
 
 WSL2/Linux/macOS:
 
 ```sh
-docker compose down
-cargo install --path codex-rs/cli --bin codex --bin qwen-codex --locked --force -j 1
-export PATH="$HOME/.cargo/bin:$PATH"
 docker compose up -d
-qwen-codex
+cargo build --manifest-path codex-rs/cli/Cargo.toml --bin codex --bin qwen-codex -j 1
+codex-rs/target/debug/qwen-codex
 ```
 
 Windows PowerShell:
 
 ```powershell
-docker compose down
-cargo install --path codex-rs/cli --bin codex --bin qwen-codex --locked --force -j 1
 docker compose up -d
-qwen-codex
+cargo build --manifest-path codex-rs/cli/Cargo.toml --bin codex --bin qwen-codex -j 1
+.\codex-rs\target\debug\qwen-codex.exe
 ```
 
 If your model is not running at `http://127.0.0.1:8002/v1`, edit `.env` and change only `QWEN_CODEX_BASE_URL`.
-
-`qwen-codex` delegates to the local `codex` binary, so both binaries must come from the same fresh install. On WSL/Linux/macOS, make sure `~/.cargo/bin` appears before older installs such as `~/.local/bin` in `PATH`.
 
 The bundled compose downloads `QuantTrio/Qwen3.5-9B-AWQ`, but exposes it to the agent as the stable local id `qwen35-local`. This is intentional for classes: students can change the downloaded model in `docker-compose.yml` and keep `--served-model-name qwen35-local`, so no extra `.env` setting is needed.
 
