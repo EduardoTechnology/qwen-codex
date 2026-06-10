@@ -41,6 +41,8 @@ If your model is not running at `http://127.0.0.1:8002/v1`, edit `.env` and chan
 
 The bundled compose downloads `QuantTrio/Qwen3.5-9B-AWQ`, but exposes it to the agent as the stable local id `qwen35-local`. This is intentional for classes: students can change the downloaded model in `docker-compose.yml` and keep `--served-model-name qwen35-local`, so no extra `.env` setting is needed.
 
+The root `docker-compose.yml` pins the Docker Compose project name to `qwen-9b`, so `docker compose up -d` and `docker compose down` from the repository root reuse the same model cache volumes instead of downloading the model again under a new project name.
+
 If a student also changes `--served-model-name`, uncomment `QWEN_CODEX_MODEL` in `.env` and set it to the exact id returned by `/v1/models`.
 
 Optional checks:

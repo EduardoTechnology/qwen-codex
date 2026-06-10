@@ -1,3 +1,5 @@
+name: qwen-9b
+
 services:
   qwen-codex-model:
     image: vllm/vllm-openai:latest
